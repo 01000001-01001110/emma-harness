@@ -66,7 +66,7 @@ use emma_tools_lsp::{doc, lang, Pool};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::code::{Candidate, DefTarget, Diag, LspStatus, LspUpdate, Severity};
+use super::code::{Candidate, DefTarget, Diag, LspStatus, LspUpdate, Place, Severity};
 
 // region: The seam
 // ---------------------------------------------------------------------------
@@ -145,6 +145,18 @@ pub enum Request {
         text: String,
         line: usize,
         col: usize,
+    },
+    /// Ask where the symbol under the cursor is used.
+    References {
+        rel: String,
+        text: String,
+        line: usize,
+        col: usize,
+    },
+    /// Ask what this file contains.
+    Symbols {
+        rel: String,
+        text: String,
     },
     /// Ask what every run of characters in the file is, for colour.
     Highlight {
@@ -330,6 +342,76 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
                         &text,
                         answer,
                     );
+                }
+            }
+            Request::References {
+                rel,
+                text,
+                line,
+                col,
+            } => {
+                if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
+                    sync_now(o, &text, &mut pending, &mut deadline);
+                    // Not `ask`, which sends a bare position: `ReferenceParams`
+                    // has a required `context`, and a server within its rights
+                    // to reject the request without one would fail silently
+                    // here, because a timed-out ask draws nothing.
+                    let client = o.client.clone();
+                    let sink = sink.clone();
+                    let uri = doc::to_uri(&o.path);
+                    let path = rel.clone();
+                    let about = word_at(&text, line, col);
+                    let root = root.clone();
+                    let position = position_of(&text, line, col);
+                    tokio::spawn(async move {
+                        let params = json!({
+                            "textDocument": { "uri": uri },
+                            "position": {
+                                "line": position.line,
+                                "character": position.character,
+                            },
+                            // The declaration is included because a reader
+                            // asking "where is this used" is usually navigating,
+                            // and the definition is one of the places to go.
+                            "context": { "includeDeclaration": true },
+                        });
+                        let result = tokio::time::timeout(
+                            ASK_TIMEOUT,
+                            client.request("textDocument/references", params),
+                        )
+                        .await;
+                        if let Ok(Ok(a)) = result {
+                            sink(LspUpdate::Places {
+                                path,
+                                about: format!("references to {about}"),
+                                rows: reference_places(&a.value, &root),
+                            });
+                        }
+                    });
+                }
+            }
+            Request::Symbols { rel, text } => {
+                if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
+                    sync_now(o, &text, &mut pending, &mut deadline);
+                    let client = o.client.clone();
+                    let sink = sink.clone();
+                    let uri = doc::to_uri(&o.path);
+                    let path = rel.clone();
+                    tokio::spawn(async move {
+                        let params = json!({ "textDocument": { "uri": uri } });
+                        let result = tokio::time::timeout(
+                            ASK_TIMEOUT,
+                            client.request("textDocument/documentSymbol", params),
+                        )
+                        .await;
+                        if let Ok(Ok(a)) = result {
+                            sink(LspUpdate::Places {
+                                about: format!("symbols in {path}"),
+                                rows: symbol_places(&a.value, &path),
+                                path,
+                            });
+                        }
+                    });
                 }
             }
             Request::Highlight { rel, text } => {
@@ -788,6 +870,125 @@ pub fn hover_lines(result: &Value) -> Option<Vec<String>> {
         return None;
     }
     Some(trimmed)
+}
+
+/// The identifier under the cursor, for the places panel's header.
+///
+/// Best effort and labelled as such: it is a caption, never a lookup. The
+/// server is asked about a position, not about this word, so a header that is
+/// slightly wrong is a cosmetic defect while a *lookup* keyed on a guessed word
+/// would be an answer about the wrong symbol.
+fn word_at(text: &str, line: usize, col: usize) -> String {
+    let Some(source) = text.lines().nth(line) else {
+        return String::new();
+    };
+    let chars: Vec<char> = source.chars().collect();
+    let ident = |c: &char| c.is_alphanumeric() || *c == '_';
+    let mut start = col.min(chars.len());
+    while start > 0 && ident(&chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col.min(chars.len());
+    while end < chars.len() && ident(&chars[end]) {
+        end += 1;
+    }
+    chars[start..end].iter().collect()
+}
+
+/// Every reference the server named, as rows the panel can open.
+///
+/// **A hit outside the root is dropped rather than listed**, which is the same
+/// containment law the definition jump follows: this page does not open files
+/// outside the repository, so offering a row that refuses when pressed would be
+/// a drawn control that does nothing. The count of what was dropped is not
+/// shown, because a reference in a registry checkout is not a fact about this
+/// repository.
+fn reference_places(result: &Value, root: &Path) -> Vec<Place> {
+    let items = match result {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        other => vec![other.clone()],
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(uri) = item.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(path) = doc::from_uri(uri) else {
+            continue;
+        };
+        // `relative_to`, never `strip_prefix`: on Windows the root is
+        // canonicalised to `\\?\E:\...` and the URI comes back as `E:\...`,
+        // so the raw comparison drops every hit in the repository. The
+        // definition jump paid for this one already.
+        let Some(rel) = relative_to(root, &path) else {
+            continue;
+        };
+        let range = item.get("range");
+        let at = |k: &str| {
+            range
+                .and_then(|r| r.get("start"))
+                .and_then(|s| s.get(k))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize
+        };
+        let line = at("line");
+        out.push(Place {
+            // The path and line, because the panel is a list of *places* and
+            // the line's own text is not available here: this answer names
+            // files the page has not read.
+            label: format!("{rel}:{}", line + 1),
+            rel,
+            line,
+            col: at("character"),
+        });
+    }
+    out
+}
+
+/// This file's symbols, flattened depth-first with their nesting shown.
+///
+/// Both wire shapes, for the reason the tool's renderer handles both: a
+/// `DocumentSymbol` is a tree and a `SymbolInformation` is a flat list with a
+/// location, and a server that ignores the hierarchical declaration would
+/// otherwise render as an empty file.
+fn symbol_places(result: &Value, rel: &str) -> Vec<Place> {
+    fn walk(items: &Value, depth: usize, rel: &str, out: &mut Vec<Place>) {
+        let Some(items) = items.as_array() else {
+            return;
+        };
+        for item in items {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>");
+            // `selectionRange` is the identifier and `range` the whole item;
+            // the first is where a reader wants the cursor to land.
+            let range = item
+                .get("selectionRange")
+                .or_else(|| item.get("range"))
+                .or_else(|| item.pointer("/location/range"));
+            let at = |k: &str| {
+                range
+                    .and_then(|r| r.get("start"))
+                    .and_then(|s| s.get(k))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize
+            };
+            out.push(Place {
+                label: format!("{}{name}", "  ".repeat(depth)),
+                rel: rel.to_string(),
+                line: at("line"),
+                col: at("character"),
+            });
+            if let Some(children) = item.get("children") {
+                walk(children, depth + 1, rel, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(result, 0, rel, &mut out);
+    out
 }
 
 /// Where a `textDocument/definition` answer points, with containment applied.
@@ -1396,6 +1597,161 @@ mod tests {
         });
         let update = until(&seen, |u| matches!(u, LspUpdate::Hover { .. })).await;
         assert!(matches!(update, LspUpdate::Hover { lines: None, .. }));
+    }
+
+    /// Where a symbol is used, all the way through - and the half that
+    /// matters is the location this test drops rather than the one it keeps.
+    #[tokio::test]
+    async fn a_reference_outside_the_root_is_not_offered_as_a_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical");
+        std::fs::write(root.join("lib.rs"), "fn main() {}").expect("write");
+        let outside = dir.path().parent().expect("parent").join("elsewhere.rs");
+        let fake = Fake::new().answering(
+            "textDocument/references",
+            json!([
+                {
+                    "uri": doc::to_uri(&root.join("lib.rs")),
+                    "range": {
+                        "start": { "line": 4, "character": 8 },
+                        "end": { "line": 4, "character": 12 }
+                    }
+                },
+                {
+                    "uri": doc::to_uri(&outside),
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 4 }
+                    }
+                }
+            ]),
+        );
+        let (client, sent) = fake.start(&root, rust()).await;
+        let pool = Arc::new(Pool::new());
+        pool.adopt(&root, client).await;
+        let (handle, rx) = channel();
+        let (sink, seen) = collector();
+        tokio::spawn(run(root, pool, rx, sink));
+
+        handle.post(open("lib.rs", "fn main() {}"));
+        handle.post(Request::References {
+            rel: "lib.rs".into(),
+            text: "fn main() {}".into(),
+            line: 0,
+            col: 3,
+        });
+        let update = until(&seen, |u| matches!(u, LspUpdate::Places { .. })).await;
+        let LspUpdate::Places { about, rows, .. } = update else {
+            unreachable!("matched above");
+        };
+        assert_eq!(about, "references to main", "the header names the word");
+        assert_eq!(rows.len(), 1, "the hit outside the root is not a row");
+        assert_eq!(rows[0].rel, "lib.rs");
+        assert_eq!(rows[0].line, 4);
+        assert_eq!(rows[0].col, 8);
+
+        // And the request carried the context the spec makes mandatory: a
+        // server within its rights to reject a `ReferenceParams` without one
+        // would fail silently here, because a request that times out draws
+        // nothing at all.
+        let log = sent.lock().expect("sent");
+        let asked = log
+            .iter()
+            .find(|m| m.get("method").and_then(Value::as_str) == Some("textDocument/references"))
+            .expect("a references request was sent");
+        assert_eq!(
+            asked.pointer("/params/context/includeDeclaration"),
+            Some(&json!(true)),
+            "ReferenceParams requires a context"
+        );
+    }
+
+    /// What a file contains, nested: the tree is flattened depth-first and the
+    /// nesting survives as indent, because a list of bare names cannot say
+    /// which `new` belongs to which type.
+    #[tokio::test]
+    async fn the_symbols_of_a_file_come_back_flattened_and_still_nested() {
+        let fake = Fake::new().answering(
+            "textDocument/documentSymbol",
+            json!([{
+                "name": "Widget",
+                "kind": 23,
+                "range": {
+                    "start": { "line": 2, "character": 0 },
+                    "end": { "line": 9, "character": 1 }
+                },
+                "selectionRange": {
+                    "start": { "line": 2, "character": 7 },
+                    "end": { "line": 2, "character": 13 }
+                },
+                "children": [{
+                    "name": "new",
+                    "kind": 6,
+                    "range": {
+                        "start": { "line": 4, "character": 4 },
+                        "end": { "line": 6, "character": 5 }
+                    },
+                    "selectionRange": {
+                        "start": { "line": 4, "character": 11 },
+                        "end": { "line": 4, "character": 14 }
+                    }
+                }]
+            }]),
+        );
+        let (_dir, handle, seen, _sent) = rig(fake, "fn main() {}").await;
+        handle.post(open("lib.rs", "fn main() {}"));
+        handle.post(Request::Symbols {
+            rel: "lib.rs".into(),
+            text: "fn main() {}".into(),
+        });
+        let update = until(&seen, |u| matches!(u, LspUpdate::Places { .. })).await;
+        let LspUpdate::Places { rows, .. } = update else {
+            unreachable!("matched above");
+        };
+        let labels: Vec<&str> = rows.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(labels, vec!["Widget", "  new"], "the child is indented");
+        // The identifier, not the item: `selectionRange` beats `range`, so
+        // pressing Enter lands on the name rather than on the line above it.
+        assert_eq!((rows[0].line, rows[0].col), (2, 7));
+        assert_eq!((rows[1].line, rows[1].col), (4, 11));
+    }
+
+    /// The other wire shape. A server that ignores the hierarchical
+    /// declaration answers with `SymbolInformation`, whose position is under
+    /// `location`, and reading only the first shape would draw an empty file.
+    #[test]
+    fn a_flat_symbol_answer_is_read_as_well_as_a_nested_one() {
+        let rows = symbol_places(
+            &json!([{
+                "name": "main",
+                "kind": 12,
+                "location": {
+                    "uri": "file:///whatever/lib.rs",
+                    "range": {
+                        "start": { "line": 7, "character": 3 },
+                        "end": { "line": 7, "character": 7 }
+                    }
+                }
+            }]),
+            "lib.rs",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "main");
+        assert_eq!((rows[0].line, rows[0].col), (7, 3));
+    }
+
+    /// The panel's header names the word under the cursor, and the cursor is
+    /// allowed to be anywhere in it - including at the very end, which is
+    /// where it sits after somebody has just typed the name.
+    #[test]
+    fn the_word_under_the_cursor_is_found_from_either_end_of_it() {
+        let text = "let widget = 1;\nfn other() {}";
+        assert_eq!(word_at(text, 0, 4), "widget", "at the start");
+        assert_eq!(word_at(text, 0, 7), "widget", "in the middle");
+        assert_eq!(word_at(text, 0, 10), "widget", "at the end");
+        assert_eq!(word_at(text, 1, 3), "other", "on the second line");
+        assert_eq!(word_at(text, 0, 12), "", "on nothing");
+        assert_eq!(word_at(text, 9, 0), "", "past the end of the file");
     }
 
     /// Go to definition, all the way through: the server's URI comes back as a

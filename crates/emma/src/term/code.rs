@@ -70,7 +70,8 @@
 //!
 //! **The language server decorates; it never delays.** Diagnostics land in the
 //! gutter beside the lines they are about and under the exact span the server
-//! named, `F5` asks what is under the cursor and `F6` where it is defined, and
+//! named, `F5` asks what is under the cursor and `F6` where it is defined,
+//! `F8` asks where it is used and `F10` what the file contains, and
 //! one row under the document carries the server's state, the count and the
 //! message the cursor is sitting on. **Nothing in this module talks to a
 //! server**: it holds an [`Lsp`] that only an [`LspUpdate`] writes, delivered
@@ -1316,6 +1317,54 @@ impl Popup {
     }
 }
 
+/// One row of the places list: a reference, or a symbol in this file.
+///
+/// The two share a type because they share a purpose and a key: both answer
+/// "where do I go", both draw as a path and a line, and both are opened by
+/// pressing Enter on a row. Two nearly identical lists would be two places to
+/// fix the next time the opening rule changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    /// What the row says: the line's own text for a reference, the symbol's
+    /// name and kind for a symbol.
+    pub label: String,
+    /// Repo-relative. A place outside the root is not offered at all, which is
+    /// the containment rule the definition jump already follows.
+    pub rel: String,
+    /// 0-based, as LSP counts and as the page indexes.
+    pub line: usize,
+    pub col: usize,
+}
+
+/// The places panel: references to a symbol, or the symbols in a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Places {
+    /// What was asked, for the header: the symbol's name, or the file's.
+    pub about: String,
+    pub rows: Vec<Place>,
+    pub at: usize,
+}
+
+impl Places {
+    pub fn move_by(&mut self, down: bool) {
+        if self.rows.is_empty() {
+            return;
+        }
+        self.at = if down {
+            (self.at + 1).min(self.rows.len() - 1)
+        } else {
+            self.at.saturating_sub(1)
+        };
+    }
+
+    pub fn chosen(&self) -> Option<&Place> {
+        self.rows.get(self.at)
+    }
+}
+
+/// The most rows the places panel draws at once.
+pub const PLACES_MAX_ROWS: usize = 12;
+
 /// The most hover lines kept. rust-analyzer's hover on a trait method runs to
 /// hundreds; the popup is a glance, and the file underneath is what the page
 /// is for.
@@ -1364,6 +1413,13 @@ pub enum LspUpdate {
         path: String,
         target: DefTarget,
     },
+    /// Where a symbol is used, or what a file contains. An empty list is a
+    /// real answer and says so rather than opening an empty panel.
+    Places {
+        path: String,
+        about: String,
+        rows: Vec<Place>,
+    },
     /// What every run of characters in the file is, for colour.
     Tokens {
         path: String,
@@ -1411,6 +1467,8 @@ pub struct Lsp {
     pub hover: Option<HoverPopup>,
     /// The completion popup, when one is open.
     pub popup: Option<Popup>,
+    /// References, or this file's symbols, when either was asked for.
+    pub places: Option<Places>,
     /// What the server said each run of characters in the open file is, for
     /// colour. Empty when there is no server, which draws plain text rather
     /// than a highlighter's guess.
@@ -1557,6 +1615,18 @@ impl CodeView {
                         }
                     }
                 }
+            }
+            LspUpdate::Places { path, about, rows } => {
+                if open.as_deref() != Some(path.as_str()) {
+                    return None;
+                }
+                if rows.is_empty() {
+                    self.lsp.places = None;
+                    self.lsp.note = Some(format!("no results for {about}"));
+                    return None;
+                }
+                self.lsp.places = Some(Places { about, rows, at: 0 });
+                None
             }
             LspUpdate::Tokens { path, items } => {
                 if open.as_deref() == Some(path.as_str()) {
@@ -1718,7 +1788,8 @@ impl CodeView {
 /// process crosses this enum; the handler below never touches disk, which is
 /// what makes it testable without a repository.
 ///
-/// The LSP half adds `Hover` and `Definition`.
+/// The LSP half adds `Hover`, `Definition`, `Complete`, `References`,
+/// `Symbols` and the `Goto` that opens a row of the last two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeAction {
     /// Not this page's key (or a chord/release): let it fall through.
@@ -1746,6 +1817,13 @@ pub enum CodeAction {
     /// Ask what could be typed at the cursor. The answer arrives as
     /// [`LspUpdate::Completions`] and opens the popup.
     Complete,
+    /// Open a row from the places panel. The column is still a UTF-16
+    /// offset, because the file it indexes may not have been read yet.
+    Goto(Place),
+    /// Ask where the symbol under the cursor is used.
+    References,
+    /// Ask what this file contains.
+    Symbols,
     /// A question about the open file, already composed into the line a person
     /// could have typed ([`compose_ask`]).
     ///
@@ -1851,6 +1929,12 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if v.lsp.hover.is_some() {
         return hover_key(v, key);
     }
+    // The places panel, for the same reason and one more: unlike the
+    // completion popup it is a *destination*, so Enter belongs to it rather
+    // than to the buffer underneath.
+    if v.lsp.places.is_some() {
+        return places_key(v, key);
+    }
     if let Some(pending) = v.armed.take() {
         v.notice = None;
         // The same key again confirms; anything else cancels and is **not**
@@ -1876,6 +1960,12 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         // refuse in words when there is no readable file to ask about.
         KeyCode::F(5) => return v.ask_lsp(CodeAction::Hover),
         KeyCode::F(6) => return v.ask_lsp(CodeAction::Definition),
+        // The two list answers. `F8` and `F10` rather than the pair after
+        // `F6`, because `F7` already opens the outside editor and `F9` already
+        // asks for a completion, and moving either to keep these adjacent
+        // would change a key somebody has already learned.
+        KeyCode::F(8) => return v.ask_lsp(CodeAction::References),
+        KeyCode::F(10) => return v.ask_lsp(CodeAction::Symbols),
         // **Two spellings, because one of them does not survive every
         // terminal.** `Ctrl+Space` is the chord every editor uses and some
         // terminals swallow it; `F9` is the escape hatch that always arrives.
@@ -1966,6 +2056,38 @@ fn hover_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     CodeAction::FocusChanged
 }
 
+/// The keys the places panel owns while it is open.
+///
+/// It takes **every** key, the hover popup's rule rather than the completion
+/// popup's: this panel covers the code and is a list somebody is reading, so a
+/// key falling through would edit a line hidden behind it. Enter opens the
+/// chosen row and any other key closes the panel, which makes leaving it the
+/// cheapest thing on the page.
+///
+/// `None` for the returned action when the row names the file already open:
+/// the jump is a cursor move this side can make, and nothing needs to be read.
+fn places_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
+    match key.code {
+        KeyCode::Up | KeyCode::Down => {
+            if let Some(places) = v.lsp.places.as_mut() {
+                places.move_by(key.code == KeyCode::Down);
+            }
+            CodeAction::FocusChanged
+        }
+        KeyCode::Enter => match v.lsp.places.take() {
+            Some(p) => match p.rows.get(p.at) {
+                Some(row) => CodeAction::Goto(row.clone()),
+                None => CodeAction::FocusChanged,
+            },
+            None => CodeAction::FocusChanged,
+        },
+        _ => {
+            v.lsp.places = None;
+            CodeAction::FocusChanged
+        }
+    }
+}
+
 /// Whether this key confirms a pending discard. It is the key that asked for
 /// it: pressing the same thing twice is the gesture, and every other key
 /// cancels.
@@ -1976,23 +2098,6 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
     }
 }
 
-/// The document's keys. Every printable character is text, which is why the
-/// browser's `j`/`k`/`g` shortcuts are not reachable from here: `Tab` cycles
-/// the panes and that is where they live, and `Esc` puts the document back to
-/// being read.
-///
-/// Shift with an arrow extends a selection; an arrow without it drops one.
-/// Typing, Enter, Backspace and Delete all replace a live selection, which is
-/// what every editor does and what makes a selection worth having.
-/// The keys the completion popup owns while it is open, and only those.
-///
-/// **Everything else falls through to the editor**, which is the rule that
-/// keeps this from being the feature people turn off. A popup that swallowed
-/// Enter would stop somebody adding a line; one that swallowed Backspace would
-/// strand them. So this answers for exactly six keys and refuses the rest, and
-/// typing a character both inserts it and narrows the list.
-///
-/// `None` means the popup did not take the key.
 /// What the server said this character is, as a colour role.
 ///
 /// A linear scan of the line's tokens rather than an index, because a line has
@@ -2077,6 +2182,15 @@ fn word_start(chars: &[char], col: usize) -> usize {
     at
 }
 
+/// The keys the completion popup owns while it is open, and only those.
+///
+/// **Everything else falls through to the editor**, which is the rule that
+/// keeps this from being the feature people turn off. A popup that swallowed
+/// Enter would stop somebody adding a line; one that swallowed Backspace would
+/// strand them. So this answers for exactly six keys and refuses the rest, and
+/// typing a character both inserts it and narrows the list.
+///
+/// `None` means the popup did not take the key.
 fn popup_key(v: &mut CodeView, key: KeyEvent) -> Option<CodeAction> {
     let popup = v.lsp.popup.as_mut()?;
     match key.code {
@@ -2101,6 +2215,14 @@ fn popup_key(v: &mut CodeView, key: KeyEvent) -> Option<CodeAction> {
     }
 }
 
+/// The document's keys. Every printable character is text, which is why the
+/// browser's `j`/`k`/`g` shortcuts are not reachable from here: `Tab` cycles
+/// the panes and that is where they live, and `Esc` puts the document back to
+/// being read.
+///
+/// Shift with an arrow extends a selection; an arrow without it drops one.
+/// Typing, Enter, Backspace and Delete all replace a live selection, which is
+/// what every editor does and what makes a selection worth having.
 fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     // The popup first, and it takes six keys. See `popup_key`.
     if let Some(action) = popup_key(v, key) {
@@ -3399,7 +3521,14 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
     }
     // Last, and over the document rather than over the whole body: a popup
     // that covered the header would hide the path of the file it is about.
-    if let Some(popup) = v.lsp.hover.as_ref() {
+    if let Some(places) = v.lsp.places.as_ref() {
+        // Above both, because it is the only one of the three that took the
+        // keyboard: drawing a second box over a list somebody is arrowing
+        // through would leave two things claiming the same arrow key.
+        if content.width > 0 && content.height > 0 {
+            draw_places(content, buf, places, skin);
+        }
+    } else if let Some(popup) = v.lsp.hover.as_ref() {
         if content.width > 0 && content.height > 0 {
             let rect = draw_hover(content, buf, popup, skin);
             out.hover = (rect.width > 0 && rect.height > 0).then_some(rect);
@@ -3509,6 +3638,11 @@ pub const EXIT_HINT: &str = "Alt+c closes";
 /// one, because the editor's keys and the browser's mean different things on
 /// the same keyboard and a row naming both would be a row naming neither.
 fn help_line(v: &CodeView) -> String {
+    // First, because the panel has the keyboard: a row naming the editor's
+    // keys while the panel owns them would name keys that do nothing.
+    if v.lsp.places.is_some() {
+        return "↑/↓ pick a place · Enter opens it · any other key closes".to_string();
+    }
     if v.focus == Focus::Chat {
         return "type a question about the open file · Enter sends it · Esc back to the file \
                 · F2 saves"
@@ -3528,7 +3662,7 @@ fn help_line(v: &CodeView) -> String {
                 .to_string()
         }
         Mode::File => "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits \
-                       · F3 HISTORY · F5 hover · F6 definition · F9 complete · F7 editor"
+                       · F3 HISTORY · F5 hover · F6 definition · F8 uses                        · F10 outline · F9 complete · F7 editor"
             .to_string(),
     }
 }
@@ -3863,6 +3997,94 @@ fn draw_popup(area: Rect, buf: &mut Buffer, v: &CodeView, popup: &Popup, skin: &
             ));
         }
         put(buf, inner, row as u16, Line::from(spans));
+    }
+}
+
+/// The places panel: references to a symbol, or the symbols in a file.
+///
+/// **On the right half of the document when there is room for one**, which is
+/// the one layout decision here worth an argument. The list is a set of
+/// destinations rather than an annotation on a line, so unlike the hover and
+/// the completion popup it has no line it must stay next to — and keeping the
+/// left half clear means the code stays readable while somebody arrows through
+/// the answers about it. On a narrow pane it takes the whole width, because
+/// half of a narrow pane is a column of ellipses.
+///
+/// The chosen row is a styled cell rather than a colour, the rule every list
+/// on this page follows: colour alone is not a marker on a monochrome
+/// terminal.
+fn draw_places(area: Rect, buf: &mut Buffer, places: &Places, skin: &Skin) {
+    if places.rows.is_empty() || area.width < 12 || area.height < 4 {
+        return;
+    }
+    let rows = places.rows.len().min(PLACES_MAX_ROWS).min(
+        // Two for the border, one for the header.
+        area.height.saturating_sub(3) as usize,
+    );
+    if rows == 0 {
+        return;
+    }
+    let width = if area.width >= 60 {
+        area.width / 2
+    } else {
+        area.width
+    };
+    let rect = Rect::new(
+        area.right().saturating_sub(width),
+        area.y,
+        width,
+        rows as u16 + 3,
+    );
+
+    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
+    let inner = block.inner(rect);
+    for row in inner.y..inner.bottom() {
+        put(
+            buf,
+            Rect::new(inner.x, row, inner.width, 1),
+            0,
+            Line::from(Span::styled(
+                " ".repeat(inner.width as usize),
+                skin.palette.style(Role::Text),
+            )),
+        );
+    }
+    block.render(rect, buf);
+
+    let w = inner.width as usize;
+    // The header says what was asked and how many answers came back, because a
+    // list of twelve rows out of forty is a different fact from a list of
+    // twelve, and the panel is the only place that difference can be told.
+    let head = format!("{} ({})", sanitise(&places.about), places.rows.len());
+    put(
+        buf,
+        inner,
+        0,
+        Line::from(Span::styled(
+            fit(&head, w, skin.glyphs.ellipsis),
+            skin.palette.style(Role::Dim),
+        )),
+    );
+
+    let at = places.at.min(places.rows.len() - 1);
+    // No stored first row: with one selection and no wheel, "keep the chosen
+    // row on screen" is the whole scrolling rule, and a stored offset would be
+    // a second thing to keep in step with it.
+    let first = scroll_to_show(0, at, rows);
+    for (row, place) in places.rows.iter().enumerate().skip(first).take(rows) {
+        let chosen = row == at;
+        let text = fit(&sanitise(&place.label), w, skin.glyphs.ellipsis);
+        let style = if chosen {
+            skin.palette.chip(Role::Accent)
+        } else {
+            skin.palette.style(Role::Text)
+        };
+        put(
+            buf,
+            inner,
+            (row - first) as u16 + 1,
+            Line::from(Span::styled(pad(&text, w), style)),
+        );
     }
 }
 
@@ -6198,6 +6420,151 @@ mod tests {
             Some(("src/term/code.rs".to_string(), 9, 4)),
             "a cross-file jump is the shell's, because it is a read"
         );
+    }
+
+    fn places(rows: Vec<(&str, usize, usize)>) -> LspUpdate {
+        LspUpdate::Places {
+            path: "src/main.rs".into(),
+            about: "references to widget".into(),
+            rows: rows
+                .into_iter()
+                .map(|(rel, line, col)| Place {
+                    label: format!("{rel}:{}", line + 1),
+                    rel: rel.to_string(),
+                    line,
+                    col,
+                })
+                .collect(),
+        }
+    }
+
+    /// The two list keys reach the shell from the browser and from inside the
+    /// document, which is the whole reason they are function keys.
+    #[test]
+    fn f8_asks_where_a_symbol_is_used_and_f10_what_the_file_contains() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(8))),
+            CodeAction::References
+        );
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(10))), CodeAction::Symbols);
+
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(8))),
+            CodeAction::References,
+            "a letter would be text here; a function key still arrives"
+        );
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(10))), CodeAction::Symbols);
+    }
+
+    /// With nothing readable open they refuse in words, the rule `F5` and `F6`
+    /// already follow: a key that silently does nothing is a key people report.
+    #[test]
+    fn the_list_keys_refuse_in_words_when_there_is_no_file_to_ask_about() {
+        let mut v = sample();
+        for code in [KeyCode::F(8), KeyCode::F(10)] {
+            v.lsp.note = None;
+            assert_eq!(handle_key(&mut v, key(code)), CodeAction::FocusChanged);
+            assert!(
+                lsp_line(&v).is_some_and(|l| l.contains("open a text file first")),
+                "{code:?} said nothing"
+            );
+        }
+    }
+
+    /// An empty answer is an answer. It says so on the status row rather than
+    /// opening a panel with no rows in it, which would be a box saying nothing.
+    #[test]
+    fn no_results_is_a_sentence_rather_than_an_empty_panel() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(v.apply_lsp(places(vec![])), None);
+        assert!(v.lsp.places.is_none(), "no panel opens");
+        let line = lsp_line(&v).expect("a sentence");
+        assert!(
+            line.contains("no results for references to widget"),
+            "{line}"
+        );
+    }
+
+    /// The panel owns the keyboard while it is up: the arrows move the
+    /// selection, Enter opens the chosen row, and anything else closes it
+    /// without reaching the buffer underneath.
+    #[test]
+    fn the_places_panel_moves_opens_and_closes() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        let before = v.open.as_ref().expect("open").lines.clone();
+
+        assert_eq!(
+            v.apply_lsp(places(vec![
+                ("src/main.rs", 0, 3),
+                ("src/term/code.rs", 41, 8),
+            ])),
+            None
+        );
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Down)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::Goto(Place {
+                label: "src/term/code.rs:42".into(),
+                rel: "src/term/code.rs".into(),
+                line: 41,
+                col: 8,
+            }),
+            "Enter opens the row the arrows landed on"
+        );
+        assert!(v.lsp.places.is_none(), "opening a row closes the panel");
+
+        // And a key that is not one of the three closes it without editing the
+        // line it was drawn over.
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Char('x'))),
+            CodeAction::FocusChanged
+        );
+        assert!(v.lsp.places.is_none());
+        assert_eq!(
+            v.open.as_ref().expect("open").lines,
+            before,
+            "the key did not reach the buffer"
+        );
+    }
+
+    /// Drawn: the header says what was asked and how many came back, and the
+    /// chosen row is a styled cell rather than a colour, because colour alone
+    /// is not a marker on a monochrome terminal.
+    #[test]
+    fn the_places_panel_is_painted_with_its_count_and_a_marked_row() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![
+            ("src/main.rs", 0, 3),
+            ("src/term/code.rs", 41, 8),
+        ]));
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        assert!(
+            rows.iter().any(|r| r.contains("references to widget (2)")),
+            "the header names the ask and the count: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("src/term/code.rs:42")),
+            "every row is drawn: {rows:#?}"
+        );
+        let chosen = buf
+            .content()
+            .iter()
+            .any(|c| c.symbol() == "s" && c.style() == skin().palette.chip(Role::Accent));
+        assert!(chosen, "the chosen row is a styled cell, not a colour");
     }
 
     /// The containment law, on this side of the seam: a definition outside the

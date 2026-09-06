@@ -54,6 +54,24 @@ out for themselves.
   server: a busy or dead one means no decorations, never a pause. A run
   without the bridge says so rather than reporting that nothing was found.
 
+- **Completion, on `Ctrl+space` or `F9`, and by itself as you type.** A list
+  opens on a character the server calls a trigger, or once a word is three
+  letters long; `Tab` and `Enter` both accept and every other key falls
+  through to the editor. A signature line under the document names the
+  argument the cursor is in.
+
+- **Code is coloured by the server that type-checked it.** Comments, keywords,
+  strings, numbers, types and functions each have a theme role, so a theme can
+  set them and one that names none of them keeps the built-in six. There is no
+  grammar here and no guess: with no server the file is drawn as plain text.
+
+- **`F8` lists where a symbol is used and `F10` lists what the file
+  contains.** Both open one panel on the right of the document. Arrows move
+  the selection, `Enter` opens the chosen place, and any other key closes it.
+  A use outside the repository is not offered, the rule the definition jump
+  already follows, and an empty answer is a sentence on the status row rather
+  than an empty box.
+
 - **The Code page has a chat strip.** `Tab` reaches it, and a question typed
   there goes down the same channel a typed line takes, so a running goal is
   the steering queue's answer and not the page's. The question carries which

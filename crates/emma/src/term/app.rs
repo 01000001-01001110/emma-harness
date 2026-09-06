@@ -1908,6 +1908,36 @@ impl App {
         });
     }
 
+    /// Ask where the symbol under the cursor is used, or what this file
+    /// contains. One function because the two differ only in the request:
+    /// both land in the same panel and are opened by the same key.
+    fn code_lsp_places(&mut self, references: bool) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            if let Some(view) = self.code.as_mut() {
+                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+            }
+            return;
+        };
+        let Some(view) = self.code.as_ref() else {
+            return;
+        };
+        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
+            return;
+        };
+        let (rel, line, col) = (open.path.clone(), open.line, open.col);
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        handle.post(if references {
+            super::code_lsp::Request::References {
+                rel,
+                text,
+                line,
+                col,
+            }
+        } else {
+            super::code_lsp::Request::Symbols { rel, text }
+        });
+    }
+
     /// Ask for hover, or for a definition, at the cursor.
     fn code_lsp_ask(&mut self, definition: bool) {
         let Some(handle) = self.code_lsp.as_ref() else {
@@ -1958,24 +1988,42 @@ impl App {
         let Some((rel, line, col)) = view.apply_lsp(update) else {
             return;
         };
-        // A cross-file jump, and the one place the shell still converts a
-        // column: `col` is a UTF-16 offset into a file nothing had read. The
-        // bridge converts the same-file case itself, where it holds the buffer.
-        let action = super::code::CodeAction::Open(rel.clone());
-        let _ = self.code_act(action);
-        if let Some(view) = self.code.as_mut() {
-            let converted = view
-                .open
-                .as_ref()
-                .and_then(|o| o.lines.get(line))
-                .map(|l| {
-                    let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
-                    l[..bytes.min(l.len())].chars().count()
-                })
-                .unwrap_or(col);
-            view.jump_to(line, converted);
-            view.lsp.note = Some(format!("{rel}:{}", line + 1));
+        self.code_jump(&rel, line, col);
+    }
+
+    /// Put the cursor on one place, opening the file first when it is not the
+    /// one already on screen.
+    ///
+    /// **The one place the shell still converts a column.** `col` is a UTF-16
+    /// offset into a file nothing has read, so it can only be converted once
+    /// the line exists in a buffer; the bridge converts the same-file case
+    /// itself, where it holds that buffer already. A file that is already open
+    /// is **not** re-opened, because a re-read would throw away unsaved edits
+    /// to reach a line inside the very file being edited.
+    fn code_jump(&mut self, rel: &str, line: usize, col: usize) {
+        let same = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .is_some_and(|o| o.path == rel);
+        if !same {
+            let action = super::code::CodeAction::Open(rel.to_string());
+            let _ = self.code_act(action);
         }
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        let converted = view
+            .open
+            .as_ref()
+            .and_then(|o| o.lines.get(line))
+            .map(|l| {
+                let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
+                l[..bytes.min(l.len())].chars().count()
+            })
+            .unwrap_or(col);
+        view.jump_to(line, converted);
+        view.lsp.note = Some(format!("{rel}:{}", line + 1));
     }
 
     // endregion: The language-server bridge
@@ -2082,6 +2130,18 @@ impl App {
             }
             CodeAction::Definition => {
                 self.code_lsp_ask(true);
+                None
+            }
+            CodeAction::Goto(place) => {
+                self.code_jump(&place.rel, place.line, place.col);
+                None
+            }
+            CodeAction::References => {
+                self.code_lsp_places(true);
+                None
+            }
+            CodeAction::Symbols => {
+                self.code_lsp_places(false);
                 None
             }
             CodeAction::Close => {
