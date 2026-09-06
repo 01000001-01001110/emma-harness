@@ -93,9 +93,55 @@
     It exists because the Harness page drew those controls against a scheduler
     Emma does not have, and the answer was not to delete the controls but to
     notice that Emma already owns the things they name.
-    <strong>None of the page's controls reach it yet.</strong> This page
-    describes the module; the keys arrive with the Harness package.
+    <strong>The Harness page reaches all of it since 2026-09-06.</strong>
+    This page describes the module; <a href="terminal-pages.html">the pages
+    page</a> describes the keys.
   </p>
+
+  <h2 id="keys">Which keys reach it, and what they answer on Windows</h2>
+
+  <p>
+    Thirteen keys on the Harness page reach this module: start a run, archive
+    one, delete one, pause, resume, cancel, add a task, sweep the finished
+    ones, reorder the queue, write one of the three permission presets, and
+    report what the permission file says today. Archive, delete and sweep ask
+    twice, because each of them destroys something a reader cannot get back by
+    pressing the key again.
+  </p>
+
+  <p>
+    <strong>Three of the thirteen have no Windows implementation, and the page
+    says so in three places rather than drawing a control that does
+    nothing.</strong> Pause, resume and cancel send <code>SIGSTOP</code>,
+    <code>SIGCONT</code> and <code>SIGINT</code>, and Windows has no equivalent
+    of any of them. Pressing one produces the refusal's own sentence, naming
+    the platform and the operation; the chip loses its accent while keeping its
+    click rectangle, so a click reaches the same sentence a keystroke does; and
+    the subtitle row carries the note whether or not anybody presses anything.
+    The other ten work here: <code>runctl</code> gained real Windows arms for
+    the process lookup, the detached spawn, archive, delete and the policy
+    write when it landed.
+    <span class="chip cert">certified</span> drawn from the real session store
+    on Windows 11 at 161 columns, in the H2 port report. The refusal is the
+    <code>Refusal::Unsupported</code> value's own <code>Display</code>, so the
+    words on screen and the words in the module cannot drift.
+  </p>
+
+  <p>
+    <code>policy_summary</code> is the read side of <code>write_policy</code>
+    and deliberately not its inverse. A permission file can hold a mixture no
+    preset would produce, and answering &ldquo;Safe&rdquo; for it would be a
+    summary that reads as a receipt for a write nobody made. It names a preset
+    only when the file matches one exactly, reports what is actually there
+    otherwise, and counts rules carrying a specifier apart, because
+    <code>write_policy</code> leaves those alone and a total that swallowed
+    them would claim authorship of somebody else's decision. A file that does
+    not parse is said to be unparseable and nothing is claimed about its
+    contents.
+    <span class="chip test">tested</span> making the preset match accept every
+    file turns both of its tests red.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>policy_summary</code>, <code>write_policy</code>, <code>Refusal</code>; crates/emma/src/term/harness.rs &mdash; <code>control_key</code>, <code>chip_bar</code></span>
 
   <h2 id="pid">A run is a process, and the process is named in the run's id</h2>
 

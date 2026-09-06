@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The claude engine · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page because these pages open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm</p>
+  <h1>The claude engine: a goal handed to another program</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+    <a href="providers-claude.html">The claude engine</a>
+    <span class="now">The claude engine</span>
+  </nav>
+
+<p class="lede">
+  Selecting <code>claude</code> does not put a client behind Emma's loop. It
+  replaces the loop. <code>main.rs</code> branches once, on the resolved
+  provider's name, and hands the whole goal to a <code>claude -p</code> child
+  whose events are streamed back and turned into the same <code>Outcome</code>
+  every other goal produces. The two engines agree on exactly one thing: a goal
+  in, an outcome out.
+</p>
+
+<h2 id="kind">A provider name that refuses every request</h2>
+
+<p>
+  There is a <code>ProviderKind</code> for <code>claude</code> even though
+  nothing behind it ever sends a request, because provider selection is one
+  mechanism and has to stay one: the flag, the settings file, the Settings
+  screen's cycler, the keys row and the per-provider model entry all read the
+  same registry, and a second selection surface beside it would be two places to
+  set this and two places for a bug to hide.
+</p>
+
+<p>
+  The price is an object that cannot pretend. Every request through it fails,
+  loudly, naming the branch in <code>main.rs</code> that should have caught the
+  dispatch before anything got there. That is an assertion wearing a trait
+  rather than a half-working client, and it is deliberate: a <code>send</code>
+  that answered prose would make a mis-wired dispatch look like a working one.
+  <span class="chip test">tested</span> the refusal is the thing that gets a
+  test, because a send that ever succeeded would mean Emma's loop had quietly
+  become what drives this engine.
+</p>
+
+<p>
+  It is keyless, like Ollama and for a related reason: the CLI carries its own
+  authentication, so Emma has no credential to store and does not want one. A
+  second copy of a key under <code>~/.emma</code> would be a second thing to
+  rotate and a second thing to leak. That is what makes the keys row read
+  <code>n/a</code>.
+</p>
+<span class="src">crates/llm/src/claude_cli.rs; crates/emma/src/engine/claude.rs</span>
+
+<h2 id="escalation">The escalation rule</h2>
+
+<p>
+  <strong>Emma hands the child the posture the user handed Emma, and never
+  more.</strong> The same bit that puts Emma's own gate into skip-everything is
+  the only thing that may unlock the child's bypass; without it the child is
+  given <code>--permission-mode default</code> positively rather than by
+  omission, so a change in the CLI's own default cannot silently widen what a
+  goal may do.
+  <span class="chip test">tested</span> without the bypass bit, Emma never
+  passes the dangerous flag; shown red under mutation.
+</p>
+
+<p>
+  Under this engine Emma's approval gate does not apply at all. The permission
+  system in force is the child's own, and a denial from it ends the goal
+  stalled rather than being retried. A page describing Emma's gate is describing
+  something that is not running for a claude goal.
+  <span class="chip test">tested</span> a denial ends the goal stalled; shown
+  red under mutation.
+</p>
+
+<h2 id="windows">Windows: the handle, the shim and the newline</h2>
+
+<p>
+  <strong>The fork shipped a Windows liveness check that answered
+  &ldquo;exited&rdquo; without asking.</strong> That is a kill reporting success
+  over a running command, which is a defect class this repository has already
+  paid for once, and it arrived as new code rather than as a reverted hunk, so
+  no diff of the old file would have flagged it. The child now holds a real
+  process handle taken at spawn, which also reserves the process id and closes
+  the recycled-id hazard; liveness is a zero-length wait on that handle and the
+  stop is a terminate.
+  <span class="chip test">tested</span> a test spawns a real child, stops it,
+  reaps it and asks again; making the check answer &ldquo;exited&rdquo;
+  unconditionally turns it red.
+</p>
+
+<p>
+  Resolution honours <code>PATHEXT</code>, so a native executable beats a
+  <code>.cmd</code> shim, and a shim runs through the command interpreter with a
+  hand-built, caret-escaped command line. Two things were measured on the way to
+  that. The interpreter expands environment variables inside a quoted argument,
+  so a goal mentioning one would splice the user's own paths into the prompt;
+  the quotes are escaped for that reason. And it truncates its command line at
+  the first newline <em>and exits zero</em>, which is silent loss, so a
+  multi-line goal through a shim is refused in words rather than cut.
+  <span class="chip cert">certified</span> both measured on Windows 11, with the
+  argument round-trip pasted in the port report.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The shim half has met a shim the port
+  wrote and never a real npm one, which re-execs a runtime and may not carry the
+  exit code and output through that extra hop. Settled by a global npm install
+  on a Windows box with no native binary, then the same certification again.
+</p>
+
+<h2 id="steering">Typing during a claude goal</h2>
+
+<p>
+  A <code>claude -p</code> child runs with its input closed, so there is no turn
+  boundary inside it that a mid-goal steer could land on.
+  <a href="steering.html">Steering</a> still takes what is typed, and the
+  between-goals drain turns it into the next goal, so nothing typed is lost. The
+  queued row has to say <em>that</em> rather than promise a turn that will not
+  come, which is what the steerable flag exists for: under this engine it is
+  false, and the transcript says &ldquo;queued for after this goal&rdquo;.
+  <span class="chip test">tested</span> the two wordings are chosen by that one
+  flag.
+</p>
+
+<h2 id="unverified">What has not been checked</h2>
+
+<p>
+  <span class="chip unv">unverified</span> <strong>The stream shape is believed,
+  not measured.</strong> The fixture the decoder is tested against is synthetic,
+  written from the documented event shapes, so a shape transcribed wrongly is a
+  shape every test here agrees with. Settled by one real run with the streaming
+  output format, diffing event keys against the fixture. This is the same shape
+  as the strict decoder that passed every test and then decoded no real tool
+  call, which is why it is named here rather than left implied.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Nothing in the engine has run on
+  macOS. The unix liveness check reads a zombie as alive, which is mitigated by
+  racing the stop against the child's own wait, and that race is untested.
+  Settled by the filtered suite on the Mac.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Nothing has been drawn on a real
+  console: every terminal seam here goes through a recording double. Two
+  terminal defects have shipped from this repository past a green suite for
+  exactly that reason.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

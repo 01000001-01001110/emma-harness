@@ -245,8 +245,8 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
         </tr>
         <tr>
           <td>Code</td>
-          <td>An EXPLORER tree of the tracked files, the selected file's contents, and that file's commit history with the patch each commit introduced. Read-only.</td>
-          <td>Editing. There is no cursor and no write path in this stage, and the footer says <code>read-only</code> rather than leaving the reader to find out by pressing a key. <code>F7</code> and the header's <code>[Editor]</code> button hand the file to the external editor, which is where editing happens.</td>
+          <td>An EXPLORER tree of the tracked files, the selected file's contents with an editor over them, and that file's commit history with the patch each commit introduced.</td>
+          <td>Undo. Neither the fork nor this stage has one: <code>Esc</code> keeps the buffer and warns once before a discard, so nothing is lost without a press, but a mis-typed line is retyped. <code>F7</code> and the header's <code>[Editor]</code> button still hand the repository to the external editor.</td>
         </tr>
       </tbody>
     </table>
@@ -265,19 +265,35 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
-    One thing the Harness row does not yet say out loud: <strong>the action
-    bar's nine keys are inert.</strong> <code>ACTIONS</code> is the mock's pairs
-    in the mock's order &mdash; <code>a</code> Run, <code>p</code> Pause,
-    <code>r</code> Resume, <code>x</code> Cancel and five more &mdash; and
-    nothing routes any of them. The module that would answer them exists:
-    <a href="terminal-runctl.html"><code>runctl</code></a> landed on 2026-09-06
-    with the verification, the signalling and the detached spawn behind it, and
-    no key on this page reaches it. That is a drawn control that does nothing,
-    which is the defect class this page's own Memory story is about, so it is
-    named here rather than left to be discovered.
-    <span class="chip cert">certified</span>: grep the tree for
-    <code>runctl</code> and the only hit outside the module is its
-    <code>pub mod</code> line in <code>lib.rs</code>.
+    <strong>The action bar's keys were inert until 2026-09-06 and are not
+    now.</strong> Every one of them reaches
+    <a href="terminal-runctl.html"><code>runctl</code></a>: start, archive,
+    delete, pause, resume, cancel, the task queue's add, sweep and reorder, and
+    the permission preset and its report. Archive, delete and sweep ask twice.
+    Where Windows has no equivalent of the operation &mdash; pause, resume and
+    cancel, which send signals &mdash; the key answers with a sentence naming
+    the platform, the chip is drawn dim, and the subtitle row says so without
+    waiting to be asked. A drawn control that does nothing is the defect class
+    this page's own Memory story is about, and the answer taken here was words
+    rather than a hidden key.
+    <span class="chip test">tested</span> eight mutations in the H2 port
+    report, including one that skips the platform check and one that deletes on
+    the first press.
+  </p>
+
+  <p>
+    Two claims on the Harness row above have moved with it. TOOL GATES named
+    the gate a run <em>started</em> with, so a session put into plan mode still
+    read <code>ASK</code> while the status bar read <code>PLAN</code>; the card
+    now names the posture, because plan mode resolves to <code>Gate::Ask</code>
+    and then asks nothing, and a card drawing the gate alone promises a
+    question that never comes. And TASK QUEUE is read from the project's own
+    task file rather than left empty, which is what makes the add, sweep and
+    reorder keys act on something a reader can see. Finished rows stay visible
+    on purpose: sweeping rows nobody can see is the same defect in a different
+    costume.
+    <span class="chip test">tested</span> the gate card keeping the started
+    gate under plan mode turns its test red.
   </p>
 
   <p>
@@ -348,8 +364,31 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     either the open file's contents or its commit history with the patch the
     selected commit introduced. <code>F3</code> and the clickable
     <code>FILE&nbsp;&middot;&nbsp;HISTORY</code> tabs move between the two.
-    <code>Tab</code> moves between panes, <code>Enter</code> opens, and the
-    footer says <code>read-only</code> in as many words.
+    <code>Tab</code> moves between panes and <code>Enter</code> opens.
+  </p>
+
+  <p>
+    <strong>The page edits and saves since 2026-09-06.</strong>
+    <code>Enter</code> on the body starts editing and the header says
+    <code>EDIT</code>; <code>Ctrl+s</code> and <code>F2</code> both save, and
+    the header names both because some terminals eat <code>Ctrl+s</code> for
+    flow control; <code>F4</code> copies the selection or the whole file; a
+    paste lands in the editor; the mouse selects text in the document and a
+    release copies it; <code>Esc</code> leaves the editor and a second
+    <code>Esc</code> leaves the page, guarded once by an unsaved warning.
+  </p>
+
+  <p>
+    <strong>A file whose bytes this page cannot reproduce is read-only, and the
+    header says why.</strong> Three causes: the read was sanitised (a TAB or a
+    control byte in the source), the file has mixed line terminators, or it was
+    rewritten underneath the read. The argument is the column-budget rule read
+    backwards, and it is worth stating because the next person to &ldquo;fix&rdquo;
+    the read-only header by removing the lock will detab somebody's source.
+    <span class="chip cert">certified</span> against real files through the real
+    writer: a CRLF file saved byte-identical, a line inserted mid-file carrying
+    CRLF, no invented trailing newline, and this repository's own
+    <code>docs/architecture.html</code> round-tripped whole.
   </p>
 
   <p>
@@ -361,8 +400,8 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
-    The page is read-only and the write path is not, which matters for whoever
-    adds one: <code>code_git::joined</code> puts a file back with the line ending
+    The write path was built before the page had one, which is why the page
+    could take it unchanged: <code>code_git::joined</code> puts a file back with the line ending
     the file itself had, CRLF or LF, and the trailing-newline shape it had when
     it was opened. A save that normalises to LF on a Windows checkout rewrites
     every line of the file and calls it an edit.

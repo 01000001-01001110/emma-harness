@@ -443,6 +443,28 @@
           <td>The Harness page package, and one press.</td></tr>
       <tr><td>The Settings screen's Font Family and Font Size rows, which still say Emma cannot set a font and still store nothing. A font can only be set by hand in <code>settings.json</code>.</td>
           <td>The rows' wiring, then a press on the Mac.</td></tr>
+      <tr><td>The claude engine's stream shape. The fixture its decoder is tested against is synthetic, written from the documented event shapes, so a shape transcribed wrongly is one every test agrees with. This is the strict-decoder failure in a new place.</td>
+          <td>One real run with the streaming output format, diffing event keys against the fixture.</td></tr>
+      <tr><td>The claude engine on macOS. Nothing in it has run there; the unix liveness check reads a zombie as alive, mitigated by racing the stop against the child's own wait, and that race is untested.</td>
+          <td>The filtered engine suite on the Mac.</td></tr>
+      <tr><td>The <code>.cmd</code> resolver against a real npm shim, which re-execs a runtime and may not carry the exit code and output through the extra hop. It has met only a shim the port wrote.</td>
+          <td>A global npm install on a Windows box with no native binary, then the same certification.</td></tr>
+      <tr><td>The macOS screenshot backend. Not one line has run; its argument lists are asserted against a scripted runner that agrees with the fork's spelling.</td>
+          <td><code>cargo test -p emma-tools-screenshot</code> and one real capture on the Mac.</td></tr>
+      <tr><td>Any image on a live provider, on any of the four wires. Whether Anthropic takes a tool result whose content is text then image, whether OpenRouter passes the data URL to every upstream, and whether an Ollama vision model reads the array off a following user message.</td>
+          <td>One call each.</td></tr>
+      <tr><td>A screen captured with no windows showing, or from a locked session. Both return a rectangle of the right size and report success, and no return value distinguishes either from a plain screen.</td>
+          <td>Nothing detects it. Opening the file is the only check, which is why the test carries a size floor.</td></tr>
+      <tr><td>Every unix path through the Harness page's controls. The platform predicate is a compile-time flag and the tests branch on the same predicate they test, which is honest but is not coverage.</td>
+          <td>The filtered harness suite on the Mac.</td></tr>
+      <tr><td>A click reaching archive through a real mouse event on a real console. The chip's rectangle and the key it produces are tested at the page level; the round trip is not.</td>
+          <td>A press on the built binary.</td></tr>
+      <tr><td>Anything the Code page's editor draws on a real console. The cursor cell, the selection band and the shift across wide glyphs are the three most likely to look wrong; every assertion here is against a cell buffer.</td>
+          <td>Open a file with a wide-glyph line, put the cursor past it, drag across it, and look.</td></tr>
+      <tr><td>That a copied selection reaches a clipboard. The write has no acknowledgement on either path this uses.</td>
+          <td>Copy from the page in the built binary and paste elsewhere. It cannot be a test.</td></tr>
+      <tr><td>The Code page's per-glyph column budget. Deleting the check leaves the suite green, because the gutter and the text width happen to sum to the pane width and the renderer truncates on its own.</td>
+          <td>A diagnostic mark in the gutter and a wide glyph at the right edge, which the LSP half brings.</td></tr>
     </tbody>
   </table>
   </div>

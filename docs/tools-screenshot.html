@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Screenshot · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     Each page carries its own copy. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>Screenshot: the screen, on whichever wire the provider has</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+  <a href="tools-screenshot.html">screenshot</a>
+  <span class="now">screenshot</span>
+</nav>
+
+<p class="lede">
+  <code>Screenshot</code> captures the primary display, bounds the image so a
+  capture is not a megabyte of base64, and hands the bytes to the model on the
+  wire the running provider actually has. Three wires, not one, and the
+  difference is not cosmetic: only Anthropic's format can say <em>this picture
+  belongs to that tool result</em>.
+</p>
+
+<h2 id="wires">Three shapes, because the providers have three</h2>
+
+<p>
+  On Anthropic a tool result's content is an array, so the image is a block
+  inside the result and the model is told which call produced it. On the two
+  chat-completions hosts there is no such place, so the picture rides an
+  <code>image_url</code> content part on a following user message. On Ollama it
+  is an <code>images</code> array of base64 strings on the same following
+  message. The last two are attachments beside a result rather than part of it,
+  and whether the model looks at one depends on the model, which is what the
+  tool says out loud rather than implying.
+  <span class="chip test">tested</span> one test per wire renders a result
+  carrying one image and asserts the block, the media type and the payload;
+  removing the image arm from any of them turns its test red.
+</p>
+
+<p>
+  A provider with no image path is told to the tool as &ldquo;no&rdquo;, so a
+  provider added later gets an honest refusal in the result rather than a
+  picture dropped on the floor. A platform with no capture backend registers the
+  tool anyway and refuses in words at call time: telling the model
+  <em>I cannot capture the screen here</em> is more useful than the tool being
+  absent, because absence reads as a capability that was never mentioned.
+</p>
+<span class="src">tools/screenshot/src/lib.rs &mdash; <code>ImageDelivery</code>, <code>Screenshot</code>; crates/llm/src/content.rs &mdash; <code>ToolImage</code>, <code>ToolResult::images</code></span>
+
+<h2 id="windows">The Windows backend is GDI, because the obvious one is blocked</h2>
+
+<p>
+  <strong>Stock Defender refuses a PowerShell script that captures, resizes and
+  encodes.</strong> <code>ScriptContainedMaliciousContent</code>, reproducibly,
+  as <code>-Command</code> and as a <code>.ps1</code> alike. It was bisected:
+  capture alone is fine, resize alone is fine, JPEG alone is fine, and the three
+  together are the signature. Finding a spelling the scanner misses is evasion,
+  so the backend is in-process instead: <code>BitBlt</code>,
+  <code>StretchBlt</code> and GDI+.
+  <span class="chip cert">certified</span> reproduced and bisected on Windows 11
+  in the port report. This is worth writing down because it is the kind of
+  finding that gets re-proposed by the next person who reads the recommendation
+  it overturned.
+</p>
+
+<p>
+  <strong>The first GDI version returned a solid black image and passed every
+  test it had.</strong> PNG signature, correct dimensions, JPEG magic, smaller
+  than the original: all true of a black rectangle. The cause was that the
+  source bitmap was already selected into another device context, so the second
+  <code>SelectObject</code> returned null and <code>StretchBlt</code> copied a
+  one-pixel default. Only opening the file found it. The test carries a size
+  floor with both measured numbers now, and an environment variable that keeps
+  the capture on disk so the next person can look at it.
+  <span class="chip cert">certified</span> 1920&times;1080 PNG of 1,099,058
+  bytes and a legible 1280&times;720 JPEG of 159,551 bytes, about seventy
+  milliseconds, opened and read, with layered windows composited.
+</p>
+<span class="src">tools/screenshot/src/gdi.rs; tools/screenshot/tests/capture.rs</span>
+
+<h2 id="log">A logged capture is a path, and a resume reads the file back</h2>
+
+<p>
+  The session log records an image as its path, media type and size, never its
+  bytes: a bounded screenshot is still several hundred kilobytes of base64, and
+  a log line that size per capture makes the transcript unreadable and the fold
+  slow for no gain. The fold reads the file back when a session is resumed, and
+  when the file is gone it drops the image and appends
+  <code>[image not replayed: &hellip;]</code> to the result's text.
+  <span class="chip test">tested</span> a fold over two captures, one file
+  present and one deleted: the bytes come back for the first and the loss is
+  said for the second. Making the fold keep the log's own value turns it red.
+</p>
+
+<p>
+  That is the honest half of a real trade. Replay depends on a file outside the
+  log, and when the dependency is not met the transcript says so rather than
+  quietly becoming a text-only conversation, which a model reading it would have
+  no way to detect. Compaction, shedding and pruning all drop a result's images
+  with its text for the mirror-image reason: leaving them would ship the bytes
+  under a note saying they are gone, and would report a saving that was not
+  taken.
+</p>
+<span class="src">crates/emma/src/session.rs &mdash; <code>rehydrate_images</code>; crates/emma/src/agent.rs &mdash; the shed; crates/emma/src/prune.rs</span>
+
+<h2 id="hazards">Two hazards nothing can detect</h2>
+
+<p>
+  <span class="chip unv">unverified</span> A macOS capture with no windows
+  showing, and a Windows capture from a non-interactive window station (a
+  service, or a locked session), both return a rectangle of the right size that
+  is entirely black or entirely wallpaper, and both report success. There is no
+  return value that distinguishes either from a legitimate capture of a plain
+  screen. Settled only by looking at the file, which is why the size floor and
+  the keep-the-file hook exist. Named on
+  <a href="roadmap.html">the roadmap</a> rather than guarded in code.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Not one line of the macOS backend has
+  run. It shells out to <code>screencapture</code> and <code>sips</code>, and its
+  argument lists are asserted against a scripted runner that agrees with the
+  fork's spelling rather than with a real macOS. Settled by
+  <code>cargo test -p emma-tools-screenshot</code> plus one real capture on the
+  Mac.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> No live provider has been sent an
+  image on any of the four wires. Three specific unknowns: whether Anthropic
+  accepts a tool result whose content array is text then image in that order;
+  whether OpenRouter passes the data URL through to every upstream; and whether
+  a local vision model on Ollama reads the <code>images</code> array off a
+  following user message rather than off the tool message. Settled by one call
+  each.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>
