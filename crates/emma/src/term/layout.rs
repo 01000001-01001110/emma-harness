@@ -340,6 +340,7 @@ mod tests {
             sessions: vec![],
             commands: vec![],
             help: vec![("q".into(), "quit".into())],
+            today: None,
             collapsed: false,
         };
         compose(area, &mut buf, &v, &bar(), &side, 3, |r, buf| {
@@ -423,6 +424,7 @@ mod tests {
             sessions: vec![],
             commands: vec![],
             help: vec![],
+            today: None,
             collapsed: true,
         };
         compose(area, &mut buf, &v, &bar(), &side, 3, |_, _| None);

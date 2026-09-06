@@ -193,6 +193,17 @@ pub struct App {
     ollama_host_override: Option<String>,
 }
 
+/// Today's civil date in the machine's local zone, for the sidebar calendar.
+/// Computed at paint time rather than stored, so a session that runs past
+/// midnight moves its mark without a timer.
+fn today_local() -> sidebar::Today {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    sidebar::civil_from_secs(secs + crate::harness_state::local_offset_secs())
+}
+
 impl App {
     pub fn new(size: (u16, u16)) -> Self {
         let (cols, rows) = size;
@@ -213,6 +224,7 @@ impl App {
                 // paint time because the glyph set is the skin's to know.
                 commands: Vec::new(),
                 help: Vec::new(),
+                today: None,
                 collapsed: false,
             },
             wrap_width: chat::message_width(r.chat.width.max(1)),
@@ -1083,6 +1095,7 @@ impl App {
                 &self.tools,
             ),
             help: sidebar::quick_help(ascii),
+            today: Some(today_local()),
             collapsed,
         };
 
