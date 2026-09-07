@@ -192,14 +192,27 @@
             build that starts doing either silently changes answers.</td>
       </tr>
       <tr>
-        <td><code>voice</code>, <code>lsp</code>, <code>memory_policy</code>,
+        <td><code>lsp</code></td>
+        <td>object</td>
+        <td><code>enabled</code> is the language keys Emma may start a server
+            for; <code>servers</code> declares servers this build has never
+            heard of, keyed the same way. A declared server is never in the
+            default enabled set and has to be named in <code>enabled</code> as
+            well, and every run prints a line naming it and the command it
+            resolves to. <strong>This file only</strong> — there is no
+            project-scoped layer for it, so a cloned repository cannot declare
+            a program for Emma to spawn. See
+            <a href="tools-lsp.html#declared">an eighth language</a>.</td>
+      </tr>
+      <tr>
+        <td><code>voice</code>, <code>memory_policy</code>,
             <code>ui</code></td>
         <td>object</td>
-        <td>Four more blocks from the same port. Each is skipped when empty, so
+        <td>Three more blocks from the same port. Each is skipped when empty, so
             a file never grows one because this build knows the word.
-            <span class="chip unv">unverified</span> None of the four has a page
+            <span class="chip unv">unverified</span> None of the three has a page
             here yet, so this row is the whole of what the site says about them.
-            Reading the four types in <code>settings.rs</code> and writing them
+            Reading the three types in <code>settings.rs</code> and writing them
             up is what settles it.</td>
       </tr>
       <tr>

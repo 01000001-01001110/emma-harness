@@ -28,6 +28,22 @@ out for themselves.
 
 ## Unreleased
 
+- **A language server can be declared in `settings.json`, without a new
+  build.** A `servers` map inside the `lsp` block takes a key, the file
+  extensions it answers for, and the command to run; the entry becomes a
+  language like any of the seven built in, so it gets the same discovery, the
+  same refusals and the same tools. A key that names a built-in replaces it; a
+  new key is added after them, so a declaration cannot quietly take `.rs` away
+  from rust-analyzer. `command` is one program or one path and never a command
+  line, with `args` separate. A misspelled field is refused with the list of
+  fields that exist rather than ignored, and a refused entry does not take the
+  others with it. Because Emma cannot promise a server it did not choose stays
+  off the network, a declared one is never on by default: its key has to appear
+  in `enabled` too, every answer carries a caveat saying Emma has never driven
+  it, and every run prints the servers it may spawn and the commands they
+  resolve to. Personal settings only, so a cloned repository cannot declare a
+  program for Emma to run.
+
 - **The sidebar's SESSIONS list is a control, not a label.** Arrows walk it,
   Enter resumes the highlighted session, and a click on a row does the same.
   Both produce `/resume <id>`, a command you could have typed, rather than

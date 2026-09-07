@@ -101,6 +101,11 @@ pub enum Source {
     Override,
     Path,
     VsCodeExtension,
+    /// The absolute path a `lsp.servers` entry named. Its own variant rather
+    /// than [`Self::Path`] because the banner is what attributes an answer: a
+    /// server that was never looked up on `PATH` must not be reported as having
+    /// been found there.
+    Declared,
 }
 
 impl Source {
@@ -109,6 +114,7 @@ impl Source {
             Self::Override => "the override",
             Self::Path => "PATH",
             Self::VsCodeExtension => "a VS Code extension",
+            Self::Declared => "the command in settings.json",
         }
     }
 }
@@ -230,8 +236,15 @@ pub fn resolve_with(
     // `PATH` before extensions, for every candidate, because a server the user
     // installed deliberately outranks one that arrived with an editor.
     for candidate in language.candidates {
+        // A candidate whose name is a path was not looked up anywhere, and the
+        // banner says which.
+        let source = if is_path_like(candidate.bin) {
+            Source::Declared
+        } else {
+            Source::Path
+        };
         for entry in path_entries(candidate, env) {
-            match accept(language, candidate, entry, Source::Path, env, &mut rejected) {
+            match accept(language, candidate, entry, source, env, &mut rejected) {
                 Some(server) => return Ok(server),
                 None => continue,
             }
@@ -368,6 +381,17 @@ fn path_entries(candidate: &Candidate, env: &Env<'_>) -> Vec<PathBuf> {
     if candidate.bin.is_empty() {
         return Vec::new();
     }
+    // A `bin` that is a path is that path, and no `PATH` directory is joined to
+    // it. None of the seven built-in candidates spells one — they are all bare
+    // names — but a server declared in `settings.json` may be an absolute path,
+    // which is the whole point of allowing one: a server that is installed and
+    // deliberately not on `PATH`.
+    if is_path_like(candidate.bin) {
+        return names_for_path(Path::new(candidate.bin), env)
+            .into_iter()
+            .filter(|c| (env.exists)(c))
+            .collect();
+    }
     names_for(candidate.bin, env)
         .into_iter()
         .flat_map(|name| env.path_dirs.iter().map(move |d| d.join(&name)))
@@ -405,13 +429,21 @@ fn find_on_path(name: &str, env: &Env<'_>) -> Option<PathBuf> {
         .find(|c| (env.exists)(c))
 }
 
+/// Whether a spelling names a location rather than a program to look up.
+///
+/// One rule, used by the override and by a declared `command`, so the two
+/// cannot come to disagree about what `C:\tools\ls.exe` is.
+fn is_path_like(spec: &str) -> bool {
+    spec.contains(['/', '\\']) || Path::new(spec).is_absolute()
+}
+
 fn resolve_override(
     language: &'static Language,
     spec: &str,
     env: &Env<'_>,
 ) -> Result<Server, ToolError> {
     let var = override_env(language);
-    let looks_like_path = spec.contains(['/', '\\']) || Path::new(spec).is_absolute();
+    let looks_like_path = is_path_like(spec);
     let found = if looks_like_path {
         let p = PathBuf::from(spec);
         (env.exists)(&p).then_some(p)
@@ -540,7 +572,10 @@ fn nothing_found(language: &Language, env: &Env<'_>, rejected: &[String]) -> Too
 /// something", the other is "this is not implemented", and because this is the
 /// message that has to be unambiguous about not falling back.
 pub fn unsupported_language(shown: &str) -> ToolError {
-    let mut extensions: Vec<&str> = lang::LANGUAGES
+    // The effective table, so a language declared in `settings.json` is listed
+    // among the extensions Emma does serve. A refusal that named only the seven
+    // would be telling somebody their own entry does not exist.
+    let mut extensions: Vec<&str> = lang::table()
         .iter()
         .flat_map(|l| l.extensions.iter().copied())
         .collect();
@@ -559,7 +594,18 @@ pub fn unsupported_language(shown: &str) -> ToolError {
 /// one line in a file rather than an install, and because for three of the
 /// seven the reason it is off is a fact the user should get to weigh.
 pub fn disabled_language(language: &Language) -> ToolError {
-    let why = if language.network {
+    let why = if language.user_declared {
+        // A different sentence from the network one below, because the fact is
+        // different: this server is off because Emma will not start a program
+        // named in a file without being told to, not because of anything known
+        // about what it does.
+        format!(
+            " {} is declared in your settings.json under `lsp.servers`, and a declared server \
+             is never on by default: Emma cannot assert `reaches_network: false` about a \
+             program it did not choose.",
+            language.label
+        )
+    } else if language.network {
         format!(
             " It is off by default because {} may reach the network while answering, and \
              these tools declare `reaches_network: false`.",
@@ -635,7 +681,7 @@ pub fn presence(language: &'static Language) -> Presence {
 pub fn presence_with(language: &Language, over: Option<&str>, env: &Env<'_>) -> Presence {
     if let Some(spec) = over.map(str::trim).filter(|s| !s.is_empty()) {
         let p = PathBuf::from(spec);
-        let found = if spec.contains(['/', '\\']) || p.is_absolute() {
+        let found = if is_path_like(spec) {
             (env.exists)(&p).then_some(p)
         } else {
             names_for(spec, env)
@@ -669,6 +715,12 @@ pub fn presence_with(language: &Language, over: Option<&str>, env: &Env<'_>) -> 
         ),
     ] {
         for (candidate, entry) in entries {
+            // The same correction `resolve_with` makes, for the same reason.
+            let source = if source == Source::Path && is_path_like(candidate.bin) {
+                Source::Declared
+            } else {
+                source
+            };
             match candidate.launcher.program() {
                 None => return Presence::Found { entry, source },
                 Some(name) if find_on_path(name, env).is_some() => {
@@ -682,6 +734,62 @@ pub fn presence_with(language: &Language, over: Option<&str>, env: &Env<'_>) -> 
         Some((entry, needs)) => Presence::NeedsLauncher { entry, needs },
         None => Presence::Absent,
     }
+}
+
+/// The startup disclosure for one server declared in `settings.json`.
+///
+/// **Why this is said out loud, every run.** All seven tools are
+/// `read_only: true`, which means the approval gate lets them through without
+/// asking anybody — and from this change on, one of them may spawn a program
+/// named in a configuration file. Nobody is prompted for that, so the least
+/// Emma can do is say which program, before the first call rather than after
+/// it. Home-directory settings only: `lsp.servers` is read from
+/// `~/.emma/settings.json` and from nowhere else, so a cloned repository cannot
+/// declare one.
+///
+/// Costs a `stat` and no process: [`presence`] is the no-spawn look, and this
+/// line says "may start", never "works".
+pub fn declared_line(language: &'static Language, enabled: bool) -> String {
+    declared_line_from(language, enabled, presence(language))
+}
+
+/// [`declared_line`]'s wording, as a function of what was found.
+pub fn declared_line_from(language: &Language, enabled: bool, found: Presence) -> String {
+    let command = language
+        .candidates
+        .first()
+        .map(|c| c.bin)
+        .unwrap_or_default();
+    let extensions: Vec<String> = language
+        .extensions
+        .iter()
+        .map(|e| format!(".{e}"))
+        .collect();
+    let what = match found {
+        Presence::Found { entry, .. } => format!(
+            "Emma may start {} for {} files",
+            entry.display(),
+            extensions.join(", ")
+        ),
+        Presence::NeedsLauncher { entry, needs } => format!(
+            "{} is on disk and needs `{needs}`, which is not on PATH",
+            entry.display()
+        ),
+        Presence::Absent => format!(
+            "nothing named `{command}` was found, so a call about {} will be refused rather \
+             than answered by something else",
+            extensions.join(", ")
+        ),
+    };
+    let switch = if enabled {
+        "on"
+    } else {
+        "off — add it to `lsp.enabled` to turn it on"
+    };
+    format!(
+        "settings.json declares a {} language server (`lsp.servers.{:?}`, {switch}): {what}.",
+        language.label, language.key
+    )
 }
 
 /// Every entry point one locator finds, paired with the candidate it came from,

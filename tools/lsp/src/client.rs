@@ -639,11 +639,26 @@ impl Client {
     }
 
     async fn handshake(&self) -> Result<(), ToolError> {
-        // Per language, from the table. `expect` rather than a fallback: a
-        // malformed entry is a bug in this repository, and starting a server
-        // with silently-dropped options is how `read_only` stops being true.
-        let init_options: Value = serde_json::from_str(self.server.language.init_options)
-            .expect("every Language::init_options is valid JSON");
+        // Per language, from the table. Refused rather than defaulted: starting
+        // a server with silently-dropped options is how `read_only` stops being
+        // true, because rust's options are the three switches that keep it from
+        // running the analysed project's code.
+        //
+        // **This used to be an `expect`, and the day `lsp.servers` landed that
+        // became a panic reachable from a configuration file.** It is now
+        // unreachable from one — `lang::plan_user_servers` refuses a declared
+        // `init_options` that is not an object before it can be leaked into a
+        // `Language` — and it stays an error rather than a panic anyway,
+        // because the argument for `expect` was that only this repository could
+        // put a bad value here, and that argument is gone.
+        let init_options: Value =
+            serde_json::from_str(self.server.language.init_options).map_err(|e| {
+                ToolError::Failed(format!(
+                    "the {} language server could not be started: its initializationOptions are \
+                     not valid JSON ({e}). What Emma was about to send: {}",
+                    self.server.language.label, self.server.language.init_options
+                ))
+            })?;
         let params = json!({
             // Sent so the server exits if Emma is killed without unwinding.
             // The one piece of cleanup that survives `kill -9`.

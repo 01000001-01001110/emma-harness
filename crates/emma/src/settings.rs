@@ -271,11 +271,36 @@ impl Settings {
 pub struct LspSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<Vec<String>>,
+
+    /// Language servers this build has never heard of, declared by key.
+    ///
+    /// ```json
+    /// "lsp": { "enabled": ["rust", "go"],
+    ///          "servers": { "go": { "extensions": ["go"], "command": "gopls" } } }
+    /// ```
+    ///
+    /// **A `Value` per entry rather than a struct, and that is a decision about
+    /// this file rather than about `tools/lsp`.** [`load`] treats a settings
+    /// file that does not parse as an *absent* one — deliberately, so a
+    /// preference store cannot stop Emma starting — which means a typed field
+    /// here would let one malformed server entry silently discard the
+    /// provider, the model, the theme and everything else in the file. A
+    /// `Value` always parses. The shape is then checked by
+    /// `emma_tools_lsp::lang::plan_user_servers`, which refuses the entry alone
+    /// and says why, in Emma's vocabulary rather than serde's.
+    ///
+    /// **Personal file only.** There is no project-scoped layer for these and
+    /// there must not be one: `.emma/config.json` is shared by everyone who
+    /// clones the repository, and a repository that could declare a program for
+    /// Emma to spawn is a repository that runs code on the machine of whoever
+    /// opened it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub servers: BTreeMap<String, serde_json::Value>,
 }
 
 impl LspSettings {
     pub fn is_empty(&self) -> bool {
-        self.enabled.is_none()
+        self.enabled.is_none() && self.servers.is_empty()
     }
 }
 
@@ -995,6 +1020,43 @@ mod port_blocks_tests {
         ] {
             assert!(!raw.contains(key), "{key} in {raw}");
         }
+    }
+
+    /// The declared-server block survives a round trip, an empty one is never
+    /// written, and — the half that matters — a malformed entry costs that
+    /// entry and not the rest of the file.
+    ///
+    /// **If this breaks:** somebody writes `"init_options": "{}"` and loses
+    /// their provider, their model and their theme, because [`load`] reads a
+    /// file that does not parse as a file that is not there. That is why the
+    /// map holds `Value` and the checking is `lang::plan_user_servers`'s.
+    #[test]
+    fn a_declared_lsp_server_round_trips_and_a_malformed_one_costs_only_itself() {
+        let home = tempfile::tempdir().unwrap();
+        let mut settings = load(home.path());
+        assert!(settings.lsp.servers.is_empty());
+        settings.lsp.enabled = Some(vec!["rust".into(), "go".into()]);
+        settings.lsp.servers.insert(
+            "go".into(),
+            serde_json::json!({ "extensions": ["go"], "command": "gopls" }),
+        );
+        save(home.path(), &settings).unwrap();
+        let back = load(home.path());
+        assert_eq!(back.lsp.servers["go"]["command"], "gopls");
+        assert_eq!(back.lsp.enabled.as_deref().unwrap().len(), 2);
+
+        // The shapes `plan_user_servers` refuses still parse *here*, and the
+        // rest of the file survives them.
+        std::fs::write(
+            path(home.path()),
+            r#"{"provider":"anthropic","models":{"anthropic":"claude-x"},
+                "lsp":{"servers":{"go":{"init_options":"not an object","nonsense":1},
+                                  "bad":"not even an object"}}}"#,
+        )
+        .unwrap();
+        let back = load(home.path());
+        assert_eq!(back.models["anthropic"], "claude-x");
+        assert_eq!(back.lsp.servers.len(), 2);
     }
 
     /// Absent means on for capture and hints, and the constants are the ones

@@ -261,6 +261,10 @@ pub struct LspRow {
     /// The language table's `network` flag: this server may reach the network
     /// while answering. It decides which honest notice the row carries.
     pub network: bool,
+    /// Declared in `settings.json` under `lsp.servers` rather than built in.
+    /// Shown, because "Emma chose this server" and "you named this program" are
+    /// different claims and the row is the same shape either way.
+    pub user_declared: bool,
 }
 
 /// What the no-spawn look found. This is `server::Presence` flattened to what
@@ -283,10 +287,14 @@ pub enum LspFound {
 /// read as working. `found` means a file is on disk; see [`NOTICE_LSP_FOUND`].
 pub fn lsp_value(row: &LspRow) -> String {
     let on = if row.enabled { "On" } else { "Off" };
+    // A third dimension for the declared ones, and only for them: a row that
+    // said `On, found` with nothing else would credit Emma with a choice it did
+    // not make.
+    let who = if row.user_declared { ", declared" } else { "" };
     match &row.found {
-        LspFound::Found => format!("{on}, found"),
-        LspFound::Needs(launcher) => format!("{on}, needs {launcher}"),
-        LspFound::Absent => format!("{on}, absent"),
+        LspFound::Found => format!("{on}, found{who}"),
+        LspFound::Needs(launcher) => format!("{on}, needs {launcher}{who}"),
+        LspFound::Absent => format!("{on}, absent{who}"),
     }
 }
 
@@ -2434,6 +2442,7 @@ mod tests {
             enabled,
             found,
             network,
+            user_declared: false,
         };
         vec![
             row("Rust", true, LspFound::Absent, false),
@@ -3573,6 +3582,7 @@ mod tests {
             enabled,
             found,
             network: false,
+            user_declared: false,
         };
         assert_eq!(lsp_value(&row(true, LspFound::Found)), "On, found");
         assert_eq!(lsp_value(&row(true, LspFound::Absent)), "On, absent");
@@ -3582,6 +3592,14 @@ mod tests {
         );
         assert_eq!(lsp_value(&row(false, LspFound::Found)), "Off, found");
         assert_eq!(lsp_value(&row(false, LspFound::Absent)), "Off, absent");
+
+        // And the third dimension, which only a server named in settings.json
+        // has: the row must not credit Emma with having chosen it.
+        let declared = LspRow {
+            user_declared: true,
+            ..row(true, LspFound::Found)
+        };
+        assert_eq!(lsp_value(&declared), "On, found, declared");
     }
 
     /// The whole point of the card, on the buffer: an enabled language with

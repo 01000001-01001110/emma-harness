@@ -4402,7 +4402,11 @@ fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>
             .collect()
     });
 
-    let rows = lang::LANGUAGES
+    // `lang::table()` and not `lang::LANGUAGES`: the card has to show the
+    // servers declared in this file as well as the seven built in, or the one
+    // screen that reports what Emma may start would be the one place a declared
+    // server is invisible.
+    let rows = lang::table()
         .iter()
         .map(|l| LspRow {
             label: l.label.to_string(),
@@ -4414,6 +4418,7 @@ fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>
                 Presence::Absent => LspFound::Absent,
             },
             network: l.network,
+            user_declared: l.user_declared,
         })
         .collect();
 

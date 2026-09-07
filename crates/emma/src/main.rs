@@ -138,9 +138,36 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // reach the network and these tools declare `reaches_network: false`;
     // turning one on is the user's call, and the pool reports a key this build
     // does not know rather than rejecting the file.
-    let lsp_enabled = auth::home_dir()
+    //
+    // `lsp.servers` is read from the same file and installed *first*, because
+    // it changes what the words in `lsp.enabled` mean: a key naming a declared
+    // server is a known language after this line and an unknown one before it.
+    // Home-directory settings only — a cloned repository cannot declare a
+    // program for Emma to spawn — and the two vectors below are said out loud
+    // once the terminal exists: `lsp_notes` names each declared server and the
+    // command it resolves to, because a `read_only` tool that prompts nobody
+    // may now start a program named in a configuration file, and `lsp_warnings`
+    // carries one sentence per entry that was refused.
+    let stored_lsp = auth::home_dir()
         .map(|h| emma::settings::load(&h))
-        .and_then(|s| s.lsp.enabled);
+        .map(|s| s.lsp)
+        .unwrap_or_default();
+    let lsp_enabled = stored_lsp.enabled.clone();
+    let declared = emma_tools_lsp::lang::install_user_servers(stored_lsp.servers);
+    let lsp_warnings = declared.refusals;
+    let lsp_notes: Vec<String> = declared
+        .declared
+        .iter()
+        .map(|l| {
+            let on = match lsp_enabled.as_deref() {
+                Some(keys) => keys.iter().any(|k| k.trim().eq_ignore_ascii_case(l.key)),
+                // No `lsp.enabled` is the built-in default set, and a declared
+                // server is never in it. Turning one on is an explicit act.
+                None => false,
+            };
+            emma_tools_lsp::server::declared_line(l, on)
+        })
+        .collect();
     let (lsp, lsp_pool) = match lsp_enabled {
         Some(keys) => emma_tools_lsp::lsp_tools_with(keys),
         None => emma_tools_lsp::lsp_tools(),
@@ -295,6 +322,17 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // between "Emma ignored my file" and "Emma found the typo and told me".
     // Through `warn`, which is the side channel, so `-p`'s stdout is untouched.
     for line in &theme_notices {
+        term.warn(line);
+    }
+    // What Emma may spawn, before it spawns it. These tools are `read_only` and
+    // the approval gate never asks about them, so the disclosure is the only
+    // place a declared server appears at all — through `note` because it is a
+    // fact about this run and not a complaint. A refused entry is a `warn`: the
+    // user wrote something that is not in force.
+    for line in &lsp_notes {
+        term.note(line);
+    }
+    for line in &lsp_warnings {
         term.warn(line);
     }
     if gate == Gate::SkipAll {

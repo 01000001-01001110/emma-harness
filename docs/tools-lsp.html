@@ -382,6 +382,128 @@
 </p>
 <span class="src">tools/lsp/src/server.rs — module doc, <code>probe</code>, <code>PROBE_TIMEOUT</code></span>
 
+<h2 id="declared">An eighth language, without a recompile</h2>
+
+<p>
+  Until 2026-09-07 the seven above were the whole list, and an eighth meant
+  editing <code>lang.rs</code> and rebuilding. A <code>servers</code> map inside
+  the existing <code>lsp</code> block of
+  <a href="config-personal.html">the personal settings file</a> now declares one:
+</p>
+
+<pre><code>{ "lsp": {
+    "enabled": ["rust", "go"],
+    "servers": {
+      "go": { "extensions": ["go"], "command": "gopls",
+              "language_id": "go", "args": [], "init_options": {} }
+    } } }</code></pre>
+
+<p>
+  <strong>Everything a declaration produces is the same
+  <code>Language</code> the built-in table holds</strong>, which is the design
+  decision the rest of this page depends on: discovery, the pool key, the
+  readiness rules, the seven tools and every refusal already work against that
+  type and none of them gained a branch for a declared entry. The alternative
+  &mdash; a parallel path for user servers &mdash; is how the two halves come to
+  disagree about containment.
+</p>
+
+<p>
+  <strong>Extend by default, override by key.</strong> A key naming one of the
+  seven replaces that entry <em>entirely</em>; there is no field-wise merge, for
+  the reason <code>crates/harness</code> refuses one &mdash; a half-overridden
+  entry is a shape neither the writer nor the reader has ever seen. A key naming
+  nothing is appended <em>after</em> the seven, so first-match-wins in
+  <code>for_path</code> cannot let a declaration quietly take <code>.rs</code>
+  away from rust-analyzer.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_key_that_names_a_built_in_replaces_it_in_place_and_entirely</code> and
+  <code>a_declared_server_becomes_a_language_after_the_built_in_seven</code>.
+</p>
+
+<p>
+  <strong><code>command</code> is one program name or one absolute path, never a
+  command line</strong>, and <code>args</code> is a separate array. That is
+  <code>usertools.rs</code>'s existing ruling, applied here because the argument
+  did not change: splitting a string on spaces is the first half of running text
+  through a shell, and a path with a space in it is not an argument boundary.
+</p>
+
+<p>
+  <strong>An unknown field is refused rather than ignored</strong>, and the
+  refusal lists the fields that exist. <code>"arguments"</code> for
+  <code>"args"</code> would otherwise start a server with none of the arguments
+  it needs, and nothing anywhere would say so &mdash; the silent-wrong-answer
+  shape this whole crate is arranged against. A refusal is never fatal: the
+  other declarations and all seven built-ins still work, which is
+  <code>Pool::unknown_keys</code>' rule about an unknown key.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_field_emma_does_not_know_is_refused_rather_than_ignored</code> and
+  <code>a_refused_entry_does_not_take_the_others_with_it</code>.
+</p>
+
+<p>
+  <strong>A declared server is <code>network: true</code> and is never in the
+  default enabled set.</strong> Emma cannot assert <code>reaches_network:
+  false</code> about a program it did not choose, and these seven tools declare
+  that bit <em>statically</em> &mdash; the declaration was made before the entry
+  existed. So turning one on is a second, explicit act: the key has to appear in
+  <code>enabled</code> as well. That is the same two-step the three network
+  languages already have.
+</p>
+
+<p>
+  <strong>The caveat travels with every answer</strong>, the way the built-in
+  caveats do, and it says what Emma does not know rather than what it hopes.
+  Certified against a real server on 2026-09-07 by declaring rust-analyzer under
+  a new key and a new extension &mdash; a genuine end-to-end receipt rather than
+  a fixture, because rust-analyzer is the only real server on either box:
+</p>
+
+<pre><code>server: version not probed (Rustish) at ...\rust-analyzer.exe
+        (found via the command in settings.json)
+Rustish is declared in your settings.json. Emma did not choose this server,
+has never driven it to an answer, and cannot promise it stays off the network
+&mdash; these tools declare `reaches_network: false` and that bit was decided
+before this entry existed. Treat a first answer from it as unproven.
+struct: Declared  (line 1)
+  field: name  String  (line 2)
+fn: describe  fn(d: &amp;Declared) -&gt; String  (line 5)</code></pre>
+
+<p>
+  <span class="chip cert">certified</span> &mdash;
+  <code>cargo test -p emma-tools-lsp --test user_servers
+  a_declared_server_answers_about_its_own_extension_for_real -- --nocapture</code>,
+  which declares a <code>.rsx</code> language pointing at rust-analyzer and
+  asserts <code>DocumentSymbols</code> comes back about a file that no built-in
+  entry claims. Note "version not probed": an entry naming its own command skips
+  the identity probe, because the person has named a specific file for a specific
+  language and re-litigating that would make the feature useless for exactly the
+  servers it exists to reach.
+</p>
+
+<p>
+  <strong>Every run prints what it may spawn.</strong> A <code>read_only</code>
+  tool that prompts nobody will now start a program named in a configuration
+  file, so the startup line names each declared server and the command it
+  resolved to. And it is <em>this file only</em> &mdash; there is deliberately no
+  project-scoped layer, so a cloned repository cannot declare a program for Emma
+  to run.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> No third-party server has been driven
+  by this. The certification above is rust-analyzer wearing a different key, so
+  it proves the plumbing and proves nothing about <code>gopls</code>,
+  <code>zls</code> or <code>clangd</code> &mdash; whose trigger characters,
+  initialization options and readiness signals all differ. It also inherits the
+  crate's standing gap: <code>experimental/serverStatusNotification</code> is
+  rust-analyzer's, so a declared server will normally sit in
+  <code>Readiness::Unknown</code>, and that caveat is the honest one rather than
+  a degraded one. Settled by installing one and asking it something.
+</p>
+<span class="src">tools/lsp/src/lang.rs &mdash; <code>plan_user_servers</code>, <code>install_user_servers</code>, <code>Plan</code>, <code>SERVER_FIELDS</code>, <code>table</code>; tools/lsp/tests/user_servers.rs</span>
+
 <h2 id="readiness">Readiness, and the 0.36-second lie</h2>
 
 <p>
