@@ -526,12 +526,37 @@ Some(Entry {
 
   <p>
     <code>/theme</code> lists what is available and which is selected;
-    <code>/theme &lt;name&gt;</code> selects one. <strong>It takes effect at the
-    next start</strong>, and there is no <code>--save</code>, because a theme is
-    read once at startup, so selecting one <em>is</em> writing it down. A live
-    swap would have to reach every drawn surface at once while the retained
-    transcript still holds rows already styled under the old colours, so the
-    realistic outcome of repainting is a half-recoloured screen.
+    <code>/theme &lt;name&gt;</code> selects one, and the Settings screen's
+    Appearance card cycles the same list. <strong>A selection applies to the
+    running screen and is written down as well</strong>, so there is no
+    <code>--save</code>: choosing a theme and keeping it are one act.
+  </p>
+
+  <p>
+    <strong>This paragraph argued the opposite until 2026-09-07, and the
+    argument was wrong rather than out of date.</strong> It said a swap would
+    have to reach every drawn surface at once while the retained transcript
+    still held rows styled under the old colours, so <em>&ldquo;the realistic
+    outcome of repainting is a half-recoloured screen&rdquo;</em>. Two things
+    were missing from that. The macOS fork this was ported from had an ambient
+    theme registry and did repaint; the port kept that seam for the
+    <a href="terminal-colour.html">accent</a> alone, which is why one control on
+    the Appearance card repainted and the control beside it did not. And the
+    surfaces do not need reaching: a <code>Palette</code> is <code>Copy</code>
+    and every copy that <code>Term</code> built is <em>live</em>, so all of them
+    read one ambient cell at draw time and the next frame is simply drawn in the
+    new colours. The transcript is re-rendered from its retained rows like
+    everything else.
+    <span class="chip cert">certified</span>: the owner selected themes from the
+    picker on Windows Terminal on 2026-09-07 and watched the colours change,
+    which is the only kind of evidence that settles a repaint &mdash; a cell
+    buffer is not a console, and this module has shipped fully-tested drawing
+    defects twice.
+    <span class="chip test">tested</span>:
+    <code>the_theme_row_cycles_the_registry_and_persists_like_slash_theme</code>
+    asserts a live palette draws the selected theme's colour while a palette
+    that is not live keeps the one it was built with, and goes red when the
+    <code>activate_theme</code> call is removed.
   </p>
 
   <p>
@@ -670,11 +695,16 @@ Some(Entry {
   <ul class="body">
     <li>
       <strong>What the colours look like.</strong> The run above proves the
-      notices and the boot. Nothing here confirms that <code>accent</code>
-      actually drew in <code>#ff8800</code>, because the run was
-      <code>-p</code> and printed no styled output.
-      <span class="chip unv">unverified</span>. Settle it by selecting the same
-      theme, restarting into the frame, and looking at a goal line.
+      notices and the boot, not the drawing: it was <code>-p</code> and printed
+      no styled output. Two things have since been looked at rather than
+      computed &mdash; the owner cycled the picker on Windows Terminal and saw
+      the colours change, and a run in a real PTY on macOS emitted the selected
+      theme's accent (<code>38;2;255;79;216</code>) and no built-in colour at
+      all. <span class="chip cert">certified</span> for those two.
+      <span class="chip unv">unverified</span> for this page's own claim:
+      nobody has confirmed <code>accent</code> draws as <code>#ff8800</code>
+      specifically, and the macOS capture never entered the alternate screen, so
+      the full-screen frame is still only proven by its cell buffer.
     </li>
     <li>
       <strong><code>/theme</code> itself.</strong> Listing, selecting, the
