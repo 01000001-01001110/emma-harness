@@ -109,9 +109,14 @@
 </div>
 
 <p>
-  All seven declare the same <code>const READ_ONLY: ToolMeta</code>:
+  All seven share one <code>const READ_ONLY: ToolMeta</code> through the
+  <code>lsp_tool!</code> shell —
   <code>read_only: true</code>, <code>reaches_network: false</code>,
-  <code>idempotent: true</code>. None of them prompts.
+  <code>idempotent: true</code> — and none of them prompts. The shell also owns
+  <code>name</code>, <code>meta</code> and <code>invoke</code>, so a fix to the
+  observation-not-abort ruling or to the meta flags is applied once. What stays
+  hand-written per tool is the schema, the cheap validation, and
+  <code>run</code>.
 </p>
 
 <p>
@@ -129,11 +134,16 @@
   point the caller meant.
 </p>
 
-<pre><code><span class="k">fn</span> cursor_schema(after: &amp;<span class="k">str</span>) -&gt; Value {
+<pre><code><span class="c">/// The one sentence every schema here says about `file_path`.</span>
+<span class="k">const</span> FILE_PATH_DESCRIPTION: &amp;<span class="k">str</span> =
+    <span class="s">"A source file inside the working directory. Emma picks the language server from the \
+     extension."</span>;
+
+<span class="k">fn</span> cursor_schema(after: &amp;<span class="k">str</span>) -&gt; Value {
     json!({
         <span class="s">"type"</span>: <span class="s">"object"</span>,
         <span class="s">"properties"</span>: {
-            <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"A source file inside the working directory. Emma picks the language server from the extension."</span> },
+            <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: FILE_PATH_DESCRIPTION },
             <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the point is on."</span> },
             <span class="s">"after"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: after },
             <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the text appears more than once."</span> }
@@ -148,12 +158,15 @@
   the function takes one: what counts as the text before the point differs
   between completing a member and asking which argument you are in. Both
   descriptions live in <code>tools/lsp/src/descriptions/</code> beside the other
-  five, as <code>completion.md</code> and <code>signature_help.md</code>.
+  five, as <code>completion.md</code> and <code>signature_help.md</code>. The
+  <code>file_path</code> sentence is one constant rather than seven copies,
+  for the same reason the shell is one macro: a drifted description would teach
+  the model something different about one tool.
 </p>
 
 <pre><code><span class="k">fn</span> position_schema(extra: Option&lt;(&amp;<span class="k">str</span>, Value)&gt;) -&gt; Value {
     <span class="k">let mut</span> properties = json!({
-        <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"A source file inside the working directory. Emma picks the language server from the extension."</span> },
+        <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: FILE_PATH_DESCRIPTION },
         <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the symbol appears on."</span> },
         <span class="s">"symbol"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once."</span> },
         <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the name appears more than once."</span> }
@@ -166,7 +179,7 @@
   which is the workflow: grep to find candidate lines, then ask the compiler
   which of them is real.
 </p>
-<span class="src">tools/lsp/src/tools.rs — <code>position_schema</code>, <code>READ_ONLY</code></span>
+<span class="src">tools/lsp/src/tools.rs — <code>lsp_tool!</code>, <code>FILE_PATH_DESCRIPTION</code>, <code>position_schema</code>, <code>READ_ONLY</code></span>
 
 <h3>What every call does before asking</h3>
 
@@ -1028,10 +1041,11 @@
   <span class="chip unv">unverified</span> This page reads
   <code>lib.rs</code>, <code>tools.rs</code>, <code>server.rs</code>,
   <code>pool.rs</code> and most of <code>render.rs</code> in full, and
-  <code>client.rs</code> (1,880 lines, of which 1,446 come before the
-  <code>#[cfg(test)]</code> on line 1,447 &mdash;
+  <code>client.rs</code> (1,880 lines, of which 1,458 come before the
+  <code>#[cfg(test)]</code> on line 1,459 &mdash;
   <span class="chip cert">certified</span> by <code>wc -l</code> and
-  <code>grep -n</code> on 2026-09-06) and <code>doc.rs</code> only in the
+  <code>grep -n</code> on 2026-09-06, re-run against a fleet still editing
+  this branch) and <code>doc.rs</code> only in the
   regions named above, plus the handshake and capability regions this page now
   describes. <code>proto.rs</code> and <code>args.rs</code> were not
   read, so nothing on this page describes the transport framing or this crate's

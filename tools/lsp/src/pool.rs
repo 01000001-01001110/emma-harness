@@ -203,7 +203,7 @@ impl Pool {
 
     /// Put an already-connected client in the pool for `root`.
     ///
-    /// The seam that lets the four tools be tested end to end — containment,
+    /// The seam that lets the seven tools be tested end to end — containment,
     /// the language gate, the rendering, the empty-result rule — against
     /// `Client::connect` and a fake, on a machine with no language server. Every
     /// one of those is a property of this crate rather than of rust-analyzer,

@@ -715,14 +715,22 @@ impl Client {
                             "snippetSupport": false,
                             "insertReplaceSupport": true,
                             "documentationFormat": ["markdown", "plaintext"],
-                            "labelDetailsSupport": true,
+                            // **`labelDetailsSupport` is deliberately absent,
+                            // and it was declared here until 2026-09-06.**
+                            // Nothing reads `labelDetails` — `render::Completion`
+                            // has no field for it — and declaring it is not
+                            // free, because a server that sees it moves
+                            // information *out* of `label`. Measured against
+                            // rust-analyzer 1.94.1 on the same fixture, one
+                            // completion after a dot: declared, the label is
+                            // `into`; not declared, it is `into(as Into)`. The
+                            // trait the method comes from was being invited
+                            // into a field this crate then dropped, so the
+                            // capability's only effect was a thinner list.
+                            // Either read the field or stop inviting it.
                         },
                     },
-                    // The other half of typing help. `activeParameterSupport`
-                    // is what lets the caller mark which argument the cursor is
-                    // in; without it a signature is a line of text with no
-                    // indication of where you are in it.
-                    // **How this page knows a `//` inside a string is not a
+                    // **How a page knows a `//` inside a string is not a
                     // comment.** The alternative is a grammar, and a grammar is
                     // a dependency per language plus a second opinion about
                     // syntax in a crate whose whole argument is asking the
@@ -739,6 +747,13 @@ impl Client {
                         "formats": ["relative"],
                         "multilineTokenSupport": true,
                     },
+                    // The other half of typing help. `activeParameterSupport`
+                    // is what lets the caller mark which argument the cursor is
+                    // in; without it a signature is a line of text with no
+                    // indication of where you are in it. `labelOffsetSupport`
+                    // is why `render::parse_signatures` has a UTF-16 branch: a
+                    // parameter label may arrive as a pair of offsets into the
+                    // signature rather than as its own string.
                     "signatureHelp": {
                         "dynamicRegistration": false,
                         "signatureInformation": {

@@ -582,9 +582,14 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>usertools.rs</code> was 1,736 lines when this page was written and is
-    1,649 now: the two page tools took four functions and three tests out with
-    them. Above the outer <code>#[cfg(test)]</code> boundary it declares 45
+    <code>usertools.rs</code> was 1,736 lines when this page was written, fell
+    to 1,649 when the two page tools took four functions and three tests out
+    with them, and is
+    <span class="chip unv">unverified</span> <strong>1,733 lines</strong> now
+    (<code>wc -l</code>, 2026-09-06) &mdash; back above the count this
+    paragraph once fell to, and the function list below was not re-walked
+    against whatever grew it back. Above the outer <code>#[cfg(test)]</code>
+    boundary it declares 45
     function items, counting the <code>Machine</code> trait's six methods
     separately from <code>RealMachine</code>'s six implementations and the
     <code>cfg</code>-duplicated <code>candidates</code>,

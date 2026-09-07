@@ -593,6 +593,24 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
+    <strong>Accepting uses the server's replace range only while the cursor is
+    still where it was asked.</strong> A completion is computed at one position
+    and the list narrows locally as somebody keeps typing, so by the time
+    <code>Enter</code> lands the cursor has usually moved past where the server
+    was looking. rust-analyzer answers a dot completion with an <em>empty</em>
+    replace range at the request position &mdash; certified against 1.94.1
+    &mdash; so applying it after three more letters inserted the candidate and
+    left those three behind: <code>c.pus</code> accepted as <code>push</code>
+    became <code>c.pushpus</code>. Once the cursor has moved, the word before it
+    is used instead, the same fallback a server naming no range at all already
+    gets.
+    <span class="chip test">tested</span>:
+    <code>a_server_range_is_dropped_once_the_cursor_has_moved_past_it</code>
+    reproduces exactly that rust-analyzer answer and asserts the three typed
+    letters are replaced, not doubled.
+  </p>
+
+  <p>
     Signature help shares the status row rather than opening a second popup. The
     active signature is flattened to one line with the current argument in
     square brackets. Brackets rather than a colour, so the marker survives the

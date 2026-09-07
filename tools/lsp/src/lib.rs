@@ -1,6 +1,6 @@
 //! Emma's code-intelligence tool surface: `FindReferences`, `GoToDefinition`,
-//! `Hover`, `DocumentSymbols`, `Diagnostics` — a language server's answers
-//! instead of text search.
+//! `Hover`, `DocumentSymbols`, `Diagnostics`, `Completion` and `SignatureHelp`
+//! — a language server's answers instead of text search.
 //!
 //! `Grep` finds a name. It cannot tell a call from a comment, does not know that
 //! `Config` here is the type declared over there, and cannot answer "what breaks
@@ -81,8 +81,8 @@
 //!
 //! **`WorkspaceSymbols` — cut.** Cheap to add and genuinely useful, and left out
 //! for one reason: it is the query most sensitive to a partial index, and it has
-//! no per-file anchor that would let a caller sanity-check the answer. Four
-//! tools that are right beat five where one is subtly thin. It is the obvious
+//! no per-file anchor that would let a caller sanity-check the answer. Seven
+//! tools that are right beat eight where one is subtly thin. It is the obvious
 //! next thing to add.
 //!
 //! # The layers
@@ -92,7 +92,7 @@
 //! correlation, death. [`pool`] owns the clients and the crash accounting.
 //! [`doc`] converts paths to URIs and "the symbol on line 42" to a position.
 //! [`render`] is everything the model reads. [`lang`] is the table every other
-//! module reads. [`tools`] is five thin shells over all of it.
+//! module reads. [`tools`] is seven thin shells over all of it.
 
 use std::sync::Arc;
 

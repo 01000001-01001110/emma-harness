@@ -817,8 +817,12 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>frame.rs</code> is 2,159 lines and was read in full for this page. It
-    declares 47 function items above the test boundary: 5 free functions in the
+    <span class="chip unv">unverified</span> <code>frame.rs</code> was 2,159
+    lines and read in full when this page was written. It is
+    <strong>3,245 lines</strong> now (<code>wc -l</code>, 2026-09-06), roughly
+    half again as large, and the function list below was never re-walked
+    against that growth. It declares 47 function items above the test
+    boundary: 5 free functions in the
     restore and modes regions, 3 more in the anchoring region, 5 backend-generic
     operations, <code>view_rows</code>, <code>spawn_clock</code>, 29
     <code>Frame</code> methods and 3 <code>Inner</code> methods. All 47 are

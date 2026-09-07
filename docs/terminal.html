@@ -98,16 +98,19 @@
   <h2 id="shape">The shape of it</h2>
 
   <p>
-    <code>crates/emma/src/term/</code> is seventeen files and 16,542 lines, plus
-    the <code>term.rs</code> facade above them and <code>usertools.rs</code>
-    beside them. It is the region the architecture map calls
-    <em>&ldquo;the largest single gap in this document&rdquo;</em>, having read
-    <em>&ldquo;almost nothing&rdquo;</em> of it. That map also puts the size at
-    <em>&ldquo;16 files, ~13,000 lines&rdquo;</em>, which is low on both counts
-    while its own sentence goes on to list seventeen filenames.
-    <span class="chip cert">certified</span>:
-    <code>wc -l crates/emma/src/term/*.rs</code> reports 17 files and 16,542
-    lines at <code>62ab9c3</code>.
+    <code>crates/emma/src/term/</code> was seventeen files and 16,542 lines at
+    <code>62ab9c3</code>, plus the <code>term.rs</code> facade above them and
+    <code>usertools.rs</code> beside them. It is the region the architecture map
+    calls <em>&ldquo;the largest single gap in this document&rdquo;</em>, having
+    read <em>&ldquo;almost nothing&rdquo;</em> of it. That map also put the size
+    at <em>&ldquo;16 files, ~13,000 lines&rdquo;</em>, which was low on both
+    counts while its own sentence went on to list seventeen filenames.
+    <span class="chip cert">certified</span>: <code>wc -l
+    crates/emma/src/term/*.rs</code> reported 17 files and 16,542 lines at
+    <code>62ab9c3</code>; on 2026-09-06 the same count is
+    <strong>31 files and 62,841 lines</strong> &mdash; the directory has nearly
+    quadrupled since the paragraph above was written, and the file list it once
+    named is no longer the whole of it.
   </p>
 
   <p>
@@ -202,7 +205,7 @@
       <span>
         Declare one value, derive one, inherit one, and the measurement behind
         that asymmetry. A loader with no <code>Result</code> in it, because a
-        <code>?</code> would throw away the seven roles that parsed.
+        <code>?</code> would throw away the twelve roles that parsed.
       </span>
     </li>
     <li>
@@ -525,7 +528,7 @@
   </p>
 
   <p>
-    <code>crates/emma/src/term/bindings.rs</code>, 1,104 lines, is one table per
+    <code>crates/emma/src/term/bindings.rs</code>, 1,301 lines, is one table per
     surface holding the chord, what it does, and proof that something answers
     it. It exists because a <code>QUICK HELP</code> panel on a branch about to
     be merged advertised six keys of which four did nothing, and nobody wrote
@@ -574,7 +577,7 @@
   <span class="src">crates/emma/src/term/bindings.rs — <code>Table::hints</code>, <code>resolve</code>, <code>UNDRAWN</code>, <code>Chord</code></span>
 
   <p>
-    <code>crates/emma/src/term/settings.rs</code>, 2,333 lines, draws the
+    <code>crates/emma/src/term/settings.rs</code>, 3,748 lines, draws the
     settings screen: a title block with the version in the corner, numbered
     cards in a grid, each card a bordered box of <code>Label &hellip; value</code> rows
     with the value right-aligned. Its own earlier policy is reversed in the

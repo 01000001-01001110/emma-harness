@@ -1,4 +1,4 @@
-//! The four tools, end to end, against a fake server.
+//! The seven tools, end to end, against a fake server.
 //!
 //! Everything asserted here is a property of this crate rather than of
 //! rust-analyzer — containment, the language gate, the shape of a rendered
@@ -14,7 +14,8 @@ use std::sync::Arc;
 use emma_tool_api::Tool;
 use emma_tools_lsp::client::READY_TIMEOUT_ENV;
 use emma_tools_lsp::{
-    Completion, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool, SignatureHelp,
+    Completion, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+    SignatureHelp,
 };
 use serde_json::{json, Value};
 use support::{fingerprint, Fake, Indexing, Sandbox};
@@ -615,11 +616,12 @@ async fn document_symbols_with_nothing_to_report_respects_the_readiness_rule() {
 
 /// `Hover` with no type information must say which of the two things happened.
 ///
-/// What breaks in the real world if this fails: `Hover` is the only one of the
-/// four that assembles its own empty-result sentence rather than letting
-/// `render::locations` or `render::symbols` do it — the call to
-/// `no_results_line` sits inline in `Hover::run`, where replacing it with a
-/// plain string reads as a tidy-up. A model told "no type information" about a
+/// What breaks in the real world if this fails: `Hover` used to be the only one
+/// of the seven that assembled its own empty-result sentence, with the call to
+/// `no_results_line` inline in `Hover::run` where replacing it with a plain
+/// string read as a tidy-up. It is `render::hover` now, beside the rule it
+/// obeys, and this test is what says the move kept the behaviour rather than
+/// only the shape. A model told "no type information" about a
 /// symbol on a cold server concludes the symbol has no type, and the usual next
 /// move is to rewrite the code around it.
 #[tokio::test]
@@ -1075,3 +1077,51 @@ async fn the_point_tool_refusals_say_enough_to_be_fixed() {
 }
 
 // endregion: The two tools that ask about a point
+
+// region: The two tools that ask about a whole file
+// ---------------------------------------------------------------------------
+// The two tools that ask about a whole file
+//
+// `DocumentSymbols` and `Diagnostics` take one argument and now share one
+// validator. That is the point of the shared validator and also its risk: a
+// mutation to it disarms both tools at once, silently, and nothing here noticed
+// when the shared `deny_unknown` was deleted during this round's own mutation
+// run. This is the guard that was missing.
+// ---------------------------------------------------------------------------
+
+/// The file-only refusals, asserted on both tools that use them.
+///
+/// What breaks in the real world if this fails: a silently dropped key reads to
+/// the model as a parameter that had no effect, so it concludes the behaviour is
+/// impossible rather than that it misspelled `file_path`. `validate_args` is
+/// pure and runs before any process, which is why this needs no server.
+#[test]
+fn the_file_tools_refuse_an_unknown_key_and_a_missing_path() {
+    let pool = Arc::new(Pool::new());
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(DocumentSymbols::new(pool.clone())),
+        Arc::new(Diagnostics::new(pool.clone())),
+    ];
+    for tool in tools {
+        let name = tool.name();
+        let err = tool
+            .validate_args(&json!({ "file_path": "src/config.rs", "flie": 1 }))
+            .expect_err("an unknown key must be refused");
+        assert!(err.detail().contains("flie"), "{name}: {err}");
+        // And the refusal lists what *is* accepted, so the next call is right.
+        assert!(err.detail().contains("file_path"), "{name}: {err}");
+
+        let err = tool
+            .validate_args(&json!({}))
+            .expect_err("the one required argument must be required");
+        assert!(err.detail().contains("file_path"), "{name}: {err}");
+
+        // The positive control: the shape the tool actually takes passes, or
+        // every assertion above would hold for a validator that refused
+        // everything.
+        tool.validate_args(&json!({ "file_path": "src/config.rs" }))
+            .expect("the documented shape must be accepted");
+    }
+}
+
+// endregion: The two tools that ask about a whole file

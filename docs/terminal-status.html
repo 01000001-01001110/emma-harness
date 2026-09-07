@@ -674,8 +674,12 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    Both files were read in full. <code>statusbar.rs</code> is 1,144 lines and
-    declares 18 function items: <code>render</code>, <code>bar_glyphs</code>,
+    Both files were read in full. <code>statusbar.rs</code> was 1,144 lines
+    when this page was written; it is
+    <span class="chip unv">unverified</span> <strong>1,171 lines</strong> now
+    (<code>wc -l</code>, 2026-09-06), and the function list below was not
+    re-walked against the 27-line difference. It declares 18 function items:
+    <code>render</code>, <code>bar_glyphs</code>,
     <code>compose</code>, <code>attempt</code>, <code>layout</code>,
     <code>sep_width</code>, <code>row_width</code>, <code>label</code>, three
     cell builders, <code>env_value</code>, <code>help_cell</code>,

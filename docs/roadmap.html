@@ -308,7 +308,10 @@
 
   <p>
     <code>main.rs</code> opens by saying it is wiring and nothing else.
-    <code>run()</code> is 634 lines sitting above the point a scripted provider
+    <code>run()</code> is
+    <span class="chip unv">unverified</span> <strong>1,077 lines</strong> now
+    (<code>crates/emma/src/main.rs:107</code>&ndash;1184, 2026-09-06; it was 634
+    when this page was written) sitting above the point a scripted provider
     attaches, so everything deciding what happens before the loop starts is
     outside what a test with no network can drive.
     <span class="chip unv">unverified</span>: found by reading, and nobody has
@@ -335,9 +338,12 @@
   <p>
     <code>config_check</code> prints the hooks, the agents, the commands, the
     permissions and the notes attached to each. It never calls
-    <code>status_line_note()</code>, and <code>main</code> reaches the call that
-    does roughly 280 lines after the <code>ConfigCheck</code> arm has already
-    returned. So a <code>statusLine</code> Emma refused is invisible to the one
+    <code>status_line_note()</code>, and <code>main</code> reaches the call
+    <span class="chip unv">unverified</span> roughly 529 lines after the
+    <code>ConfigCheck</code> arm has already returned
+    (<code>crates/emma/src/main.rs</code>: the arm returns at line 207, the
+    call is at line 736, 2026-09-06; this paragraph originally counted about
+    280). So a <code>statusLine</code> Emma refused is invisible to the one
     command whose stated job is answering why something did not happen.
   </p>
 

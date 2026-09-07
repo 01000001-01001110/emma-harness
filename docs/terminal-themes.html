@@ -218,27 +218,19 @@ pub struct Theme {
     <code>ROLE_NAMES</code> lists all fourteen names including the refused one,
     and <code>SETTABLE</code> lists the thirteen that work. The split exists so
     that <em>&ldquo;a typo of <code>text</code> should be told about
-    <code>text</code>, not about seven names that do not include it.&rdquo;</em>
-    The doc comment is quoted as it stands, and the number inside it is the
-    pre-2026-09-06 count: six source-code roles landed that day and nobody
-    updated the sentence. What it argues for is unchanged.
-    <strong>A theme that names none of the six keeps the built-in six</strong>,
-    so every theme file already written stays valid and gains readable code for
-    nothing.
-    <span class="chip unv">unverified</span> for that last claim: the fallback
-    is <code>apply_roles</code> starting from <code>BUILTIN</code> and only
-    overwriting what a file names, which is the same mechanism the original
-    seven use, but no test writes <code>comment</code> (or any of the other
-    five) into a theme file and reads the colour back out.
-    <em>What would settle it:</em> a loader test that sets
-    <code>roles.comment</code> in a temporary theme and asserts
-    <code>Palette::color(Role::Comment)</code> changed, plus one that sets none
-    of the six and asserts it did not.
-    <span class="chip test">tested</span> twice:
+    <code>text</code>, not about thirteen names that do not include
+    it.&rdquo;</em>
+    <strong>A theme that names none of the six source-code roles keeps the
+    built-in six</strong>, so every theme file already written stays valid and
+    gains readable code for nothing.
+    <span class="chip test">tested</span> three times:
     <code>a_theme_cannot_colour_ordinary_text</code> checks the refusal is
-    spoken and that the rest of the file still applied, and
+    spoken and that the rest of the file still applied,
     <code>a_misspelled_role_is_told_what_the_roles_are</code> walks every
-    element of <code>ROLE_NAMES</code> and demands it appears in the message.
+    element of <code>ROLE_NAMES</code> and demands it appears in the message,
+    and <code>a_theme_may_colour_source_code_and_all_six_roles_come_back_changed</code>
+    writes all six into a temporary theme and reads each colour back, then
+    asserts the seven chrome roles were left alone.
   </p>
 
   <p>
@@ -285,7 +277,7 @@ pub struct Theme {
   <p>
     Nothing in the loader returns a <code>Result</code>, and the region comment
     says why in one sentence: <em>&ldquo;a <code>?</code> anywhere in it would
-    throw away the seven roles that parsed because the eighth did not.&rdquo;</em>
+    throw away the twelve roles that parsed because the thirteenth did not.&rdquo;</em>
     The policy follows <code>harness/src/statusline.rs</code> rather than the
     harness's refuse-to-start rule, on the ground that every distinction a theme
     touches is made a second time in glyphs.
@@ -298,7 +290,7 @@ pub struct Theme {
         <tr><td>Nothing selected</td><td>The built-in, silently. <code>load(None, None, None)</code> is <code>(BUILTIN, [])</code>.</td></tr>
         <tr><td>Selected name not found</td><td>The built-in, and a notice naming <em>both</em> directories searched.</td></tr>
         <tr><td>Not JSON, or not a JSON object</td><td>The built-in, and a notice. serde's <code>line</code> and <code>column</code> are passed through verbatim rather than paraphrased, because the position is the whole of what the user needs.</td></tr>
-        <tr><td>A bad hex on one role</td><td>That role only. The other seven apply.</td></tr>
+        <tr><td>A bad hex on one role</td><td>That role only. The other twelve of the thirteen settable roles apply.</td></tr>
         <tr><td>An out-of-range <code>ansi256</code></td><td>The declared index; the hex survives and the index is derived instead.</td></tr>
         <tr><td>An unrecognised <code>ansi16</code> name</td><td>The declared name; the built-in role's name is kept.</td></tr>
         <tr><td>An unknown top-level key</td><td>Noted and ignored, <em>&ldquo;so a build that adds a key should not make the file unreadable to the build beside it.&rdquo;</em></td></tr>
@@ -576,8 +568,13 @@ pub struct Theme {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>theme.rs</code> is 1,211 lines and was read in full for this page,
-    tests included. It declares 19 function items above the test boundary:
+    <span class="chip unv">unverified</span> <code>theme.rs</code> was 1,211
+    lines and read in full when this page was written, tests included. It is
+    <strong>1,393 lines</strong> now (<code>wc -l</code>, 2026-09-06) &mdash;
+    the six source-code roles landed the same day this paragraph counts as
+    absent above, so the growth is expected, but the function list below was
+    not re-walked against it. It declares 19 function items above the test
+    boundary:
     <code>entry</code>, <code>slot</code>, six <code>Theme</code> accessors,
     <code>derive_index</code>, <code>load</code>, <code>apply</code>,
     <code>apply_roles</code>, <code>role_entry</code>,

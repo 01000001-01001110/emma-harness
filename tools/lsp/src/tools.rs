@@ -145,12 +145,14 @@ async fn prepare_after(
     let occurrence = args::opt_u64(args_v, tool, "occurrence")?;
 
     let prepared = prepare(pool, ctx, tool, args_v).await?;
-    let (start, text) = doc::locate(&prepared.text, line, &after, occurrence)?;
+    let (start, _) = doc::locate(&prepared.text, line, &after, occurrence)?;
     // Past the end of the match, in the same UTF-16 units the position is in.
     // Counting the argument's own units rather than re-measuring the line,
-    // because the two agree by construction and only one of them is in hand.
-    let width: u32 = after.chars().map(|c| c.len_utf16() as u32).sum();
-    let _ = text;
+    // because the two agree by construction and only one of them is in hand —
+    // and counting them through [`doc::utf16_column`] rather than inline,
+    // because this crate has exactly one answer to "how wide is that in the
+    // protocol's units" and a second one here would be a second answer.
+    let width = doc::utf16_column(&after, after.len());
     Ok((
         prepared,
         Position {
@@ -160,6 +162,15 @@ async fn prepare_after(
     ))
 }
 
+/// The one sentence every schema here says about `file_path`.
+///
+/// All seven tools take the same argument and it means the same thing in each,
+/// so it is written once: four copies of a sentence the model learns the tool
+/// surface from is four chances for one of them to say something else.
+const FILE_PATH_DESCRIPTION: &str =
+    "A source file inside the working directory. Emma picks the language server from the \
+     extension.";
+
 /// The arguments the two point tools share, and their schema.
 const CURSOR_KEYS: &[&str] = &["file_path", "line", "after", "occurrence"];
 
@@ -167,7 +178,7 @@ fn cursor_schema(after: &str) -> Value {
     json!({
         "type": "object",
         "properties": {
-            "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." },
+            "file_path": { "type": "string", "description": FILE_PATH_DESCRIPTION },
             "line": { "type": "integer", "minimum": 1, "description": "1-based line number the point is on." },
             "after": { "type": "string", "description": after },
             "occurrence": { "type": "integer", "minimum": 1, "description": "Which occurrence on the line, 1-based. Only needed when the text appears more than once." }
@@ -203,6 +214,31 @@ fn validate_cursor_args(tool: &str, args_v: &Value) -> Result<(), ToolError> {
     Ok(())
 }
 
+/// The whole schema of the two tools that ask about a *file* rather than a
+/// point in one, `DocumentSymbols` and `Diagnostics`.
+///
+/// One JSON blob rather than two identical ones. The description of
+/// `file_path` is the same sentence in all seven schemas, and it is the sentence
+/// that tells the model Emma picks the server from the extension — a copy of it
+/// that drifted would teach the model something different about one tool.
+fn file_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "file_path": { "type": "string", "description": FILE_PATH_DESCRIPTION }
+        },
+        "required": ["file_path"],
+        "additionalProperties": false,
+    })
+}
+
+/// What the two file tools check before anything is opened.
+fn validate_file_args(tool: &str, args_v: &Value) -> Result<(), ToolError> {
+    args::deny_unknown(args_v, tool, &["file_path"])?;
+    args::req_str(args_v, tool, "file_path")?;
+    Ok(())
+}
+
 /// Whether a path is YAML, so the Ansible refusal can be the specific one.
 fn is_yaml(file: &std::path::Path) -> bool {
     file.extension()
@@ -222,7 +258,7 @@ const POSITION_KEYS: &[&str] = &["file_path", "line", "symbol", "occurrence"];
 
 fn position_schema(extra: Option<(&str, Value)>) -> Value {
     let mut properties = json!({
-        "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." },
+        "file_path": { "type": "string", "description": FILE_PATH_DESCRIPTION },
         "line": { "type": "integer", "minimum": 1, "description": "1-based line number the symbol appears on." },
         "symbol": { "type": "string", "description": "The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once." },
         "occurrence": { "type": "integer", "minimum": 1, "description": "Which occurrence on the line, 1-based. Only needed when the name appears more than once." }
@@ -289,6 +325,81 @@ const READ_ONLY: ToolMeta = ToolMeta {
     idempotent: true,
 };
 
+/// The shell every tool in this file is: a struct holding the pool, a
+/// constructor, and the five `Tool` methods.
+///
+/// **Written once because it had been written seven times.** Three of those five
+/// methods — `name`, `meta`, `invoke` — are identical in every tool here and two
+/// of them carry decisions that must hold for all seven or for none:
+/// [`READ_ONLY`]'s argument, and the ruling that a tool failure is an
+/// observation rather than an abort. Seven copies is seven places for a fix to
+/// be applied six times, and this crate has already paid that once, on two
+/// request handlers that each dropped an error arm the shared helper had.
+///
+/// What stays hand-written is what actually differs, and it is not
+/// boilerplate: the schema, the cheap validation, and `run`. Each `run` names
+/// its own LSP method and its own renderer, which is the whole of what a tool
+/// is; everything the seven share before that point is already in [`prepare`].
+///
+/// The tool's name is `stringify!` of the type rather than a literal because it
+/// used to be a literal in three places per tool — the type, `name`, and the
+/// string every error message is built from — with nothing making them agree.
+macro_rules! lsp_tool {
+    (
+        $ty:ident,
+        description: $description:literal,
+        schema: $schema:expr,
+        validate: $validate:expr $(,)?
+    ) => {
+        pub struct $ty {
+            pool: Arc<Pool>,
+        }
+
+        impl $ty {
+            pub fn new(pool: Arc<Pool>) -> Self {
+                Self { pool }
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl Tool for $ty {
+            fn name(&self) -> &'static str {
+                stringify!($ty)
+            }
+
+            fn description(&self) -> &str {
+                include_str!($description)
+            }
+
+            fn input_schema(&self) -> Value {
+                $schema
+            }
+
+            fn meta(&self) -> ToolMeta {
+                READ_ONLY
+            }
+
+            fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
+                // Annotated as a plain function pointer so the argument cannot
+                // capture: validation runs before any process exists and has
+                // nothing to capture from.
+                let check: fn(&str, &Value) -> Result<(), ToolError> = $validate;
+                check(self.name(), args_v)
+            }
+
+            async fn invoke(
+                &self,
+                ctx: &ToolCtx,
+                args_v: Value,
+            ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+                // A tool failure is an observation, not a fault: the `Err` goes
+                // back to the model as a `tool_result` and the loop continues.
+                Ok(self.run(ctx, args_v).await)
+            }
+        }
+    };
+}
+
 // endregion: The shared preamble
 
 // region: FindReferences
@@ -299,16 +410,6 @@ const READ_ONLY: ToolMeta = ToolMeta {
 // dangerous — which is the same fact twice.
 // ---------------------------------------------------------------------------
 
-pub struct FindReferences {
-    pool: Arc<Pool>,
-}
-
-impl FindReferences {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
 const REFERENCES_KEYS: &[&str] = &[
     "file_path",
     "line",
@@ -317,41 +418,17 @@ const REFERENCES_KEYS: &[&str] = &[
     "include_declaration",
 ];
 
-#[async_trait::async_trait]
-impl Tool for FindReferences {
-    fn name(&self) -> &'static str {
-        "FindReferences"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/find_references.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        position_schema(Some((
-            "include_declaration",
-            json!({
-                "type": "boolean",
-                "description": "Include the definition itself among the results. Defaults to true.",
-            }),
-        )))
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        validate_position_args("FindReferences", args_v, REFERENCES_KEYS)
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    FindReferences,
+    description: "descriptions/find_references.md",
+    schema: position_schema(Some((
+        "include_declaration",
+        json!({
+            "type": "boolean",
+            "description": "Include the definition itself among the results. Defaults to true.",
+        }),
+    ))),
+    validate: |tool, args| validate_position_args(tool, args, REFERENCES_KEYS),
 }
 
 impl FindReferences {
@@ -362,12 +439,13 @@ impl FindReferences {
             Some(Value::Bool(b)) => *b,
             Some(other) => {
                 return Err(ToolError::BadArguments(format!(
-                    "FindReferences.include_declaration must be true or false, got {}",
+                    "{}.include_declaration must be true or false, got {}",
+                    self.name(),
                     args::type_name(other)
                 )))
             }
         };
-        let (prepared, position) = prepare_at(&self.pool, ctx, "FindReferences", &args_v).await?;
+        let (prepared, position) = prepare_at(&self.pool, ctx, self.name(), &args_v).await?;
 
         let mut params = text_document_position(&prepared.file, position);
         params["context"] = json!({ "includeDeclaration": include_declaration });
@@ -403,51 +481,17 @@ impl FindReferences {
 // thing models get wrong silently.
 // ---------------------------------------------------------------------------
 
-pub struct GoToDefinition {
-    pool: Arc<Pool>,
-}
-
-impl GoToDefinition {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for GoToDefinition {
-    fn name(&self) -> &'static str {
-        "GoToDefinition"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/go_to_definition.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        position_schema(None)
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        validate_position_args("GoToDefinition", args_v, POSITION_KEYS)
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    GoToDefinition,
+    description: "descriptions/go_to_definition.md",
+    schema: position_schema(None),
+    validate: |tool, args| validate_position_args(tool, args, POSITION_KEYS),
 }
 
 impl GoToDefinition {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
-        let (prepared, position) = prepare_at(&self.pool, ctx, "GoToDefinition", &args_v).await?;
+        let (prepared, position) = prepare_at(&self.pool, ctx, self.name(), &args_v).await?;
         let Answer {
             value,
             readiness,
@@ -480,51 +524,17 @@ impl GoToDefinition {
 // often replaces reading a file.
 // ---------------------------------------------------------------------------
 
-pub struct Hover {
-    pool: Arc<Pool>,
-}
-
-impl Hover {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for Hover {
-    fn name(&self) -> &'static str {
-        "Hover"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/hover.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        position_schema(None)
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        validate_position_args("Hover", args_v, POSITION_KEYS)
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    Hover,
+    description: "descriptions/hover.md",
+    schema: position_schema(None),
+    validate: |tool, args| validate_position_args(tool, args, POSITION_KEYS),
 }
 
 impl Hover {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
-        let (prepared, position) = prepare_at(&self.pool, ctx, "Hover", &args_v).await?;
+        let (prepared, position) = prepare_at(&self.pool, ctx, self.name(), &args_v).await?;
         let Answer {
             value,
             readiness,
@@ -537,15 +547,12 @@ impl Hover {
             )
             .await?;
 
-        let header = render::header(prepared.client.server(), readiness, health.as_deref());
-        let body = match render::hover_text(&value) {
-            Some(text) => text,
-            // Emptiness is a result — but only a meaningful one when the index
-            // was complete, so the same rule as everywhere else applies and the
-            // same function decides the sentence.
-            None => render::no_results_line("type information", readiness),
-        };
-        Ok(ToolOutcome::new(format!("{header}\n{body}")))
+        Ok(render::hover(
+            prepared.client.server(),
+            readiness,
+            health.as_deref(),
+            &value,
+        ))
     }
 }
 
@@ -560,60 +567,17 @@ impl Hover {
 // unfamiliar file.
 // ---------------------------------------------------------------------------
 
-pub struct DocumentSymbols {
-    pool: Arc<Pool>,
-}
-
-impl DocumentSymbols {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for DocumentSymbols {
-    fn name(&self) -> &'static str {
-        "DocumentSymbols"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/document_symbols.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." }
-            },
-            "required": ["file_path"],
-            "additionalProperties": false,
-        })
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        args::deny_unknown(args_v, "DocumentSymbols", &["file_path"])?;
-        args::req_str(args_v, "DocumentSymbols", "file_path")?;
-        Ok(())
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    DocumentSymbols,
+    description: "descriptions/document_symbols.md",
+    schema: file_schema(),
+    validate: validate_file_args,
 }
 
 impl DocumentSymbols {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
-        let prepared = prepare(&self.pool, ctx, "DocumentSymbols", &args_v).await?;
+        let prepared = prepare(&self.pool, ctx, self.name(), &args_v).await?;
         let Answer {
             value,
             readiness,
@@ -645,54 +609,20 @@ impl DocumentSymbols {
 // never touched.
 // ---------------------------------------------------------------------------
 
-pub struct Completion {
-    pool: Arc<Pool>,
-}
-
-impl Completion {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for Completion {
-    fn name(&self) -> &'static str {
-        "Completion"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/completion.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        cursor_schema(
-            "The text on that line immediately before the point you are asking about. Include \
-             the dot to ask for a value's members, as in \"config.\". The line need not compile.",
-        )
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        validate_cursor_args("Completion", args_v)
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    Completion,
+    description: "descriptions/completion.md",
+    schema: cursor_schema(
+        "The text on that line immediately before the point you are asking about. Include the \
+         dot to ask for a value's members, as in \"config.\". The line need not compile.",
+    ),
+    validate: validate_cursor_args,
 }
 
 impl Completion {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
-        let (prepared, position) = prepare_after(&self.pool, ctx, "Completion", &args_v).await?;
+        let (prepared, position) = prepare_after(&self.pool, ctx, self.name(), &args_v).await?;
         let Answer {
             value,
             readiness,
@@ -724,54 +654,20 @@ impl Completion {
 // cannot.
 // ---------------------------------------------------------------------------
 
-pub struct SignatureHelp {
-    pool: Arc<Pool>,
-}
-
-impl SignatureHelp {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for SignatureHelp {
-    fn name(&self) -> &'static str {
-        "SignatureHelp"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/signature_help.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        cursor_schema(
-            "The text on that line immediately before the point you are asking about, usually \
-             the open bracket and any arguments already typed, as in \"take(1, \".",
-        )
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        validate_cursor_args("SignatureHelp", args_v)
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    SignatureHelp,
+    description: "descriptions/signature_help.md",
+    schema: cursor_schema(
+        "The text on that line immediately before the point you are asking about, usually the \
+         open bracket and any arguments already typed, as in \"take(1, \".",
+    ),
+    validate: validate_cursor_args,
 }
 
 impl SignatureHelp {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
-        let (prepared, position) = prepare_after(&self.pool, ctx, "SignatureHelp", &args_v).await?;
+        let (prepared, position) = prepare_after(&self.pool, ctx, self.name(), &args_v).await?;
         let Answer {
             value,
             readiness,
@@ -812,54 +708,11 @@ impl SignatureHelp {
 // means the server said clean. Silence says silence.
 // ---------------------------------------------------------------------------
 
-pub struct Diagnostics {
-    pool: Arc<Pool>,
-}
-
-impl Diagnostics {
-    pub fn new(pool: Arc<Pool>) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait::async_trait]
-impl Tool for Diagnostics {
-    fn name(&self) -> &'static str {
-        "Diagnostics"
-    }
-
-    fn description(&self) -> &str {
-        include_str!("descriptions/diagnostics.md")
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." }
-            },
-            "required": ["file_path"],
-            "additionalProperties": false,
-        })
-    }
-
-    fn meta(&self) -> ToolMeta {
-        READ_ONLY
-    }
-
-    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
-        args::deny_unknown(args_v, "Diagnostics", &["file_path"])?;
-        args::req_str(args_v, "Diagnostics", "file_path")?;
-        Ok(())
-    }
-
-    async fn invoke(
-        &self,
-        ctx: &ToolCtx,
-        args_v: Value,
-    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
-        Ok(self.run(ctx, args_v).await)
-    }
+lsp_tool! {
+    Diagnostics,
+    description: "descriptions/diagnostics.md",
+    schema: file_schema(),
+    validate: validate_file_args,
 }
 
 impl Diagnostics {
@@ -868,7 +721,7 @@ impl Diagnostics {
         // `prepare` is what sends `didOpen` or `didChange`, and that is the
         // event a server publishes in response to. Asking before syncing would
         // wait for a notification nothing had asked for.
-        let prepared = prepare(&self.pool, ctx, "Diagnostics", &args_v).await?;
+        let prepared = prepare(&self.pool, ctx, self.name(), &args_v).await?;
         let diagnosis = prepared
             .client
             .diagnostics(&doc::to_uri(&prepared.file))

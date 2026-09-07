@@ -591,7 +591,10 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>term.rs</code> is 1,533 lines and was read in full for this page.
+    <span class="chip unv">unverified</span> <code>term.rs</code> was 1,533
+    lines and read in full when this page was written. It is
+    <strong>1,777 lines</strong> now (<code>wc -l</code>, 2026-09-06), and the
+    function count below was not re-walked against that growth.
     Above the <code>#[cfg(test)]</code> boundary it declares 56 function items,
     counting the <code>cfg</code>-duplicated <code>terminal_size</code> (three),
     <code>console_is_utf8</code> (two) and <code>adopt_utf8_output</code> (two)

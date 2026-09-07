@@ -133,6 +133,25 @@ fn theme_dirs(home: Option&lt;&amp;Path&gt;, root: &amp;Path) -&gt; Vec&lt;(&amp
     theme <em>files</em> may live in either place, and the choice is personal.
   </p>
 
+  <p>
+    <span class="chip cert">certified</span> <strong>The Settings screen's
+    Theme row and <code>/theme &lt;name&gt;</code> do not read the same
+    directories.</strong> The row calls
+    <code>theme::names(self.home.as_deref(), None)</code> &mdash; the second
+    argument is the harness root, and it is passed as <code>None</code> &mdash;
+    so cycling the row can only ever land on a name from
+    <code>~/.emma/themes/</code>. <code>/theme</code> and
+    <code>/theme &lt;name&gt;</code> call <code>available</code> and
+    <code>load</code> with the real root, so a project's own
+    <code>&lt;harness root&gt;/themes/</code> (a repository discovered through
+    <code>.emma/</code> puts this at <code>&lt;project&gt;/.emma/themes/</code>)
+    is reachable by typing the name even though the Settings row will never
+    offer it to cycle to. A theme file placed only in the project directory is
+    therefore selectable and unlistable in the same run, from two different
+    doors.
+  </p>
+  <span class="src">crates/emma/src/term/app.rs — the Theme row's <code>self.settings.themes = super::theme::names(&hellip;)</code> call; crates/emma/src/term/theme.rs — <code>names</code>; crates/emma/src/session_command.rs — <code>available</code>, <code>theme_dirs</code></span>
+
   <h2 id="load">The loader</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the doc</p>
@@ -208,7 +227,7 @@ pub fn load(
 
   <p class="faint">crates/emma/src/term/theme.rs · the name tables</p>
 <pre><code>/// Every role name a file may use, including the one that is refused — a typo
-/// of `text` should be told about `text`, not about seven names that do not
+/// of `text` should be told about `text`, not about thirteen names that do not
 /// include it.
 const ROLE_NAMES: [&amp;str; 14] = [
     "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
@@ -244,17 +263,15 @@ const MAX_NOTICES: usize = 5;</code></pre>
     Fourteen role names exist and thirteen may be set. <code>text</code> sits in
     the list without being settable, so a person who misspells it is told about
     <code>text</code> rather than about a list of names that does not contain
-    the one they meant. The doc comment above still says <em>&ldquo;seven
-    names&rdquo;</em>; that was the count until 2026-09-06, when the six
-    source-code roles landed and the sentence was not updated with them.
+    the one they meant.
   </p>
 
   <p>
-    The six that arrived that day are <code>comment</code>, <code>keyword</code>,
+    The six source-code roles are <code>comment</code>, <code>keyword</code>,
     <code>string</code>, <code>number</code>, <code>type</code> and
     <code>function</code>, and they colour source on the Code page from what the
     language server said each run of characters is. A theme naming none of them
-    keeps the built-in six, so a theme file written before that date is still
+    keeps the built-in six, so a theme file written before they arrived is still
     valid and gains coloured code without being touched. Two of the spellings
     differ from the <code>Role</code> they set: a file writes
     <code>string</code> for <code>Role::Str</code> and <code>function</code> for
@@ -349,8 +366,8 @@ const MAX_NOTICES: usize = 5;</code></pre>
 <pre><code>/// One role's three values, or `None` when the role keeps the built-in's.
 ///
 /// The granularity is the point: a typo in one hex costs that role and leaves
-/// the other seven applied, because a theme thrown away over one character is a
-/// theme its author cannot debug.</code></pre>
+/// the other twelve of the thirteen settable roles applied, because a theme
+/// thrown away over one character is a theme its author cannot debug.</code></pre>
 <pre><code>    let Some(rgb) = parse_hex(&amp;hex) else {
         notices.push(format!(
             "roles.{name}: \"{hex}\" is not a colour — write #rrggbb or #rgb; \
@@ -513,6 +530,82 @@ const MAX_NOTICES: usize = 5;</code></pre>
     <code>NO_COLOR</code> does are <a href="terminal.html">The terminal</a>.
   </p>
 
+  <h2 id="shipped">Two themes ship, and the built-in fails the reason one of them exists</h2>
+
+  <p>
+    <code>.emma/themes/daylight.json</code> and <code>.emma/themes/nocturne.json</code>
+    are read the same way any other theme file is, from whichever of the two
+    directories above holds them &mdash; the copies in this repository's own
+    <code>.emma/</code> are reached as &ldquo;this project&rdquo;'s directory, the
+    same path <code>the_shipped_themes_load_with_nothing_to_report</code> loads
+    them from. Both set all thirteen settable roles by name; neither leaves one
+    to fall back to the built-in.
+    <span class="chip test">tested</span>:
+    <code>the_shipped_themes_load_with_nothing_to_report</code> loads each
+    through <code>load</code>, asserts zero notices, and asserts every one of
+    the thirteen roles differs from <code>BUILTIN</code>'s &mdash; the test that
+    goes red if a future edit to either file forgets one.
+  </p>
+  <span class="src">.emma/themes/daylight.json; .emma/themes/nocturne.json; crates/emma/src/term/theme.rs — <code>the_shipped_themes_load_with_nothing_to_report</code></span>
+
+  <p>
+    <code>daylight.json</code>'s own <code>about</code> field states its reason
+    for existing: <em>&ldquo;Every foreground here was measured against
+    <code>#fdf6e3</code> and clears 4:1; the built-in's do not, which is the
+    whole reason this file exists.&rdquo;</em> That claim about the built-in is
+    checkable from the hexes alone, and it holds &mdash; by a wide margin, in
+    one case wide enough that the two roles in question trade places.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Computed, not
+    observed:</strong> WCAG relative luminance and contrast ratio, from the
+    built-in's twelve foreground-role hexes (every role except <code>Ground</code>,
+    which is the background, and <code>Text</code>, which is never a theme
+    colour) against <code>#fdf6e3</code>, the background <code>daylight.json</code>
+    names as what it measured against. No terminal rendered this; a screenshot
+    read with a real contrast checker, or an sRGB-aware tool run against the
+    actual hexes, would settle whether the arithmetic below matches what a
+    display shows.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Role</th><th>Hex</th><th>Contrast on <code>#fdf6e3</code></th></tr></thead>
+      <tbody>
+        <tr><td><code>warn</code></td><td><code>#fabd2f</code></td><td>1.57:1</td></tr>
+        <tr><td><code>ok</code></td><td><code>#b8bb26</code></td><td>1.91:1</td></tr>
+        <tr><td><code>info</code></td><td><code>#8ec07c</code></td><td>1.95:1</td></tr>
+        <tr><td><code>number</code></td><td><code>#d49e6a</code></td><td>2.19:1</td></tr>
+        <tr><td><code>string</code></td><td><code>#98ac74</code></td><td>2.29:1</td></tr>
+        <tr><td><code>type</code></td><td><code>#7eada8</code></td><td>2.31:1</td></tr>
+        <tr><td><code>function</code></td><td><code>#81a1c1</code></td><td>2.50:1</td></tr>
+        <tr><td><code>keyword</code></td><td><code>#d3869b</code></td><td>2.54:1</td></tr>
+        <tr><td><code>accent</code></td><td><code>#f5548f</code></td><td>2.97:1</td></tr>
+        <tr><td><code>dim</code></td><td><code>#8f8f94</code></td><td>2.98:1</td></tr>
+        <tr><td><code>err</code></td><td><code>#fb4934</code></td><td>3.19:1</td></tr>
+        <tr><td><code>comment</code></td><td><code>#7c7974</code></td><td>4.02:1</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <span class="chip unv">unverified</span> All twelve fall short of 4.5:1 —
+    the WCAG AA floor for body text — on this background. Ten of the twelve
+    fall short of 3:1, the floor AA sets for large text. <code>warn</code> at
+    1.57:1 is the one a light-background user would call invisible rather than
+    merely dim. And <code>comment</code>, the role every editor convention
+    treats as the one safe to de-emphasize, is the built-in's <em>most</em>
+    legible foreground against a light ground at 4.02:1 &mdash; a light-terminal
+    user reading the built-in theme would find comments easier to read than the
+    keywords, strings and types around them. This is exactly what
+    <code>daylight.json</code>'s <code>about</code> field is answering.
+    <em>What would settle it:</em> the screenshot-and-real-checker pass named
+    above, and, separately, whether anyone runs Emma's built-in theme on a
+    light terminal at all — if nobody does, the numbers above describe a
+    combination that does not occur.
+  </p>
+
   <h2 id="notverified">What this page did not settle</h2>
 
   <ul class="body">
@@ -540,6 +633,15 @@ const MAX_NOTICES: usize = 5;</code></pre>
       created, so the shadowing rule was not exercised.
       <span class="chip unv">unverified</span>. Settle it by putting a file of
       the same name in both directories with visibly different accents.
+    </li>
+    <li>
+      <strong>The built-in's contrast table above.</strong> Computed from the
+      hexes with the WCAG relative-luminance formula against
+      <code>#fdf6e3</code>, not read off a rendered screen or a live checker.
+      <span class="chip unv">unverified</span>. Settle it by opening the
+      built-in theme on an actual light-background terminal, screenshotting it,
+      and running the screenshot through a contrast checker rather than the
+      declared hexes.
     </li>
   </ul>
 

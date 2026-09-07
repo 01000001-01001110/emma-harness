@@ -107,40 +107,31 @@
     <code>View</code>.
   </p>
 
-  <p class="faint">crates/emma/src/term/app.rs &middot; <code>regions</code></p>
+  <p>
+    <strong>This section quoted code that is not in the tree.</strong> It showed
+    <code>inset_x</code>/<code>inset_y</code> insetting the window by a cell on
+    each side against an <code>INSET_MIN_ROWS</code> threshold, and a
+    <code>gap_h</code>/<code>gap_w</code> pair spending a row and a
+    <code>PANE_GAP_COLS</code> of columns on a gutter between the panes. None of
+    those five names exist in <code>layout.rs</code> &mdash; a whole-tree
+    <code>grep</code> for any of them returns nothing &mdash; and the extraction
+    section below already flagged the same fabrication once, for the constant
+    and the test, without this block being caught alongside it. What follows is
+    the function actually in the tree on 2026-09-06.
+    <span class="chip cert">certified</span>: pasted from
+    <code>crates/emma/src/term/layout.rs</code>, not retyped.
+  </p>
+
+  <p class="faint">crates/emma/src/term/layout.rs &middot; <code>regions</code></p>
   <pre><code>pub fn regions(area: Rect, sidebar_w: u16, dock_h: u16) -&gt; Regions {
-    <span class="c">// The mockup floats every box inside the window rather than flush against</span>
-    <span class="c">// it: ~14px of ground on an ~11.3px cell — one column each side, one row</span>
-    <span class="c">// above the panes and one below the bar. Shed first when the window is</span>
-    <span class="c">// small, because a float is the cheapest thing on screen; the horizontal</span>
-    <span class="c">// inset rides with the border threshold so the two shed as one look.</span>
-    <span class="k">let</span> inset_x = u16::from(area.width &gt;= UNBORDERED_COLS);
-    <span class="k">let</span> inset_y = u16::from(area.height &gt;= INSET_MIN_ROWS);
-    <span class="k">let</span> outer = area.inner(Margin::new(inset_x, inset_y));
     <span class="k">let</span> status_h = <span class="k">if</span> area.height &lt; SLIM_STATUS_ROWS { 1 } <span class="k">else</span> { 3 };
-    <span class="c">// One blank row between the main pane's bottom border and the bar's top —</span>
-    <span class="c">// measured, not styled: pane bottom ≈982px, bar top ≈1006px, one cell row.</span>
-    <span class="c">// It rides with the bar's border: a window too short for the border has no</span>
-    <span class="c">// row to spend on a gap either.</span>
-    <span class="k">let</span> gap_h = u16::from(area.height &gt;= SLIM_STATUS_ROWS);
-    <span class="k">let</span> [content, _, status] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(gap_h),
-        Constraint::Length(status_h),
-    ])
-    .areas(outer);
-    <span class="k">let</span> gap_w = <span class="k">if</span> sidebar_w &gt; 0 { PANE_GAP_COLS } <span class="k">else</span> { 0 };
-    <span class="k">let</span> [sidebar, _, main] = Layout::horizontal([
-        Constraint::Length(sidebar_w),
-        Constraint::Length(gap_w),
-        Constraint::Min(0),
-    ])
-    .areas(content);
-    <span class="k">let</span> main_bordered = area.width &gt;= UNBORDERED_COLS &amp;&amp; main.width &gt;= 5 &amp;&amp; main.height &gt;= 3;
-    <span class="c">// Inside the border the image pads the content: border at ≈362px, text at</span>
-    <span class="c">// ≈393px — the border cell plus one more column ((2,1) counts the border).</span>
+    <span class="k">let</span> [content, status] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(status_h)]).areas(area);
+    <span class="k">let</span> [sidebar, main] =
+        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(0)]).areas(content);
+    <span class="k">let</span> main_bordered = area.width &gt;= UNBORDERED_COLS &amp;&amp; main.width &gt;= 3 &amp;&amp; main.height &gt;= 3;
     <span class="k">let</span> inner = <span class="k">if</span> main_bordered {
-        main.inner(Margin::new(2, 1))
+        main.inner(Margin::new(1, 1))
     } <span class="k">else</span> {
         main
     };
@@ -157,46 +148,39 @@
         Constraint::Length(1),
     ])
     .areas(inner);
-    <span class="w">…</span>
+    Regions { sidebar, main, main_bordered, header, rule, chat, dock, hint, status }
 }</code></pre>
-  <span class="src">crates/emma/src/term/app.rs — <code>regions</code>, <code>struct Regions</code></span>
+  <span class="src">crates/emma/src/term/layout.rs — <code>regions</code>, <code>struct Regions</code></span>
 
   <p>
-    Four constants set the thresholds. <code>UNBORDERED_COLS</code> is 60, below
-    which the main pane loses its border and the horizontal float goes with it.
-    <code>SLIM_STATUS_ROWS</code> is 14 and takes the bar from three rows to
-    one, and the blank row above it rides along. <code>SLIM_HEADER_ROWS</code>
-    is 12, below which the header is one line and the rule disappears.
-    <code>INSET_MIN_ROWS</code> is 30; its comment notes that rows are the
-    scarce axis and the mockup only speaks for one window size, so degradation
-    is decided here, not copied from the image.
+    <span class="chip cert">certified</span> Three constants set the
+    thresholds, not four: <code>grep -n "^pub const" crates/emma/src/term/layout.rs</code>
+    lists exactly <code>SLIM_STATUS_ROWS</code> (14), <code>SLIM_HEADER_ROWS</code>
+    (12) and <code>UNBORDERED_COLS</code> (60). There is no window-edge inset and
+    no inter-pane gutter in this function &mdash; the sidebar, main pane and
+    status bar sit flush against the window and against each other. Whether
+    that matches the mockup's floated boxes is exactly the question the
+    fabricated block above answered wrongly by inventing code that would have
+    matched it.
   </p>
 
-  <h3>The numbers came from the image, not from the description of it</h3>
+  <h3>The proportions cite a sampled table, not the prose that describes it</h3>
 
   <p>
-    The module doc records why the pixels were re-measured on 2026-08-13:
-    <em>&ldquo;the prose description of that image was wrong in five recorded
-    places, and the design note's §1.1 sampled table, though pixel-derived,
-    still missed three facts.&rdquo;</em> The three are the ones a carve cannot
-    guess: the panes do not share edges, one blank row separates the main pane
-    from the status bar, and everything floats one cell inside the window edge.
-  </p>
-
-  <p>
-    <strong>This section quoted a constant and a test that do not exist, and
-    carried a <span class="chip test">tested</span> chip over them.</strong> It
-    showed <code>PANE_GAP_COLS</code> with its measurement comment and named
-    <code>the_pane_gaps_measured_from_the_mockup_are_in_the_carve</code> as the
-    test pinning it. Neither is in the tree, and a whole-tree search for either
-    name returns nothing. It is the false receipt this project calls worse than
-    no test: a green chip over a citation a reader cannot open, which reads as
-    evidence and is not.
-    <span class="chip unv">unverified</span> The three facts the paragraph above
-    states are still visible in the drawn layout, but nothing here asserts them.
-    Settled by finding what the carve actually does with the gap between the
-    panes, naming it, and pinning it at the mockup's own 128&times;41 grid
-    including the collapsed case.
+    <span class="chip cert">certified</span> <code>app.rs</code>'s module doc,
+    not <code>layout.rs</code>'s, is where the reason lives: <em>&ldquo;The
+    proportions are the mockup's, as pixel-sampled in the design note §1 — the
+    prose description of that image was wrong in five recorded places, so the
+    numbers here cite the sampled table, not the prose.&rdquo;</em> This page
+    previously extended that quote with a second sentence about a
+    &ldquo;design note's §1.1 sampled table&rdquo; missing three further
+    facts &mdash; a gap between panes, a blank row above the status bar, a
+    one-cell float inside the window edge &mdash; and attributed the whole
+    thing to <code>layout.rs</code>. None of that second sentence is in either
+    file's module doc; a whole-tree <code>grep</code> for &ldquo;missed three
+    facts&rdquo; or for &ldquo;§1.1&rdquo; returns nothing. <code>regions</code>
+    above is consistent with the shorter, real quote: it carves the window from
+    the sampled proportions and adds no gap and no float of its own.
   </p>
 
 
@@ -277,12 +261,19 @@
 
   <h2 id="dock">How tall the dock is</h2>
 
-  <p class="faint">crates/emma/src/term/app.rs &middot; <code>dock_height</code></p>
+  <p class="faint">crates/emma/src/term/layout.rs &middot; <code>dock_height</code></p>
   <pre><code><span class="c">/// How many rows the dock needs: three for the input box, more while the menu</span>
 <span class="c">/// is up, and the approval panel's evidence when a question is pending. Capped</span>
 <span class="c">/// at half the pane — the prompt may grow upward into transcript rows (§4.6),</span>
 <span class="c">/// not through them.</span>
-pub fn dock_height(view: &amp;View, room: u16) -&gt; u16 {
+<span class="c">///</span>
+<span class="c">/// **`width` is what makes the input box grow with what is typed**, and it was</span>
+<span class="c">/// dropped by the TUI import: the incoming `layout.rs` took `(view, room)`</span>
+<span class="c">/// only, so a message longer than one line was hidden behind a three-row box.</span>
+<span class="c">/// The wrapping is `super::view::dock_rows`' — the same function the box paints</span>
+<span class="c">/// with, so the height and the paint cannot disagree. `None` is "the caller</span>
+<span class="c">/// does not know the width yet" and answers with the old three-row floor.</span>
+pub fn dock_height(view: &amp;View, room: u16, width: Option&lt;u16&gt;) -&gt; u16 {
     <span class="k">let</span> room = room.max(1);
     <span class="c">// The ceiling would like to be half the window and must never exceed the</span>
     <span class="c">// window: on a degenerate frame half-of-room is below the floors, and a</span>
@@ -296,23 +287,38 @@ pub fn dock_height(view: &amp;View, room: u16) -&gt; u16 {
                 <span class="k">let</span> extra = (m.rows.len() <span class="k">as</span> u16 + u16::from(m.note.is_some())).min(8);
                 bounded(3 + extra, 3)
             }
-            None =&gt; 3.min(ceiling),
+            <span class="c">// The typed message decides, through the same function the box</span>
+            <span class="c">// paints with. Absent a width nothing can be wrapped, so the old</span>
+            <span class="c">// three rows are the floor and the answer when the caller does not</span>
+            <span class="c">// know yet.</span>
+            None =&gt; <span class="k">match</span> width {
+                Some(w) =&gt; bounded(super::view::dock_rows(view, w), 3),
+                None =&gt; 3.min(ceiling),
+            },
         },
     }
 }</code></pre>
-  <span class="src">crates/emma/src/term/app.rs — <code>dock_height</code></span>
+  <span class="src">crates/emma/src/term/layout.rs — <code>dock_height</code></span>
 
   <p>
-    Three cases, and the <code>clamp</code> guard in the middle is there because
-    a clamp whose minimum exceeds its maximum panics. On a degenerate frame half
-    of <code>room</code> falls below the floors, so <code>ceiling</code> is
-    itself capped at <code>room</code> and every floor is
-    <code>floor.min(ceiling)</code>.
+    <span class="chip unv">unverified</span> This block was quoted with a
+    two-argument signature, <code>(view, room)</code>. It is three now,
+    <code>(view, room, width)</code>: the third argument lets the box grow with
+    a typed message that wraps past one line, through the same
+    <code>view::dock_rows</code> the input box paints with, and answers with the
+    old three-row floor when the caller does not know the width yet. The three
+    cases below it are otherwise unchanged, and the <code>clamp</code> guard
+    in the middle is there because a clamp whose minimum exceeds its maximum
+    panics: on a degenerate frame half of <code>room</code> falls below the
+    floors, so <code>ceiling</code> is itself capped at <code>room</code> and
+    every floor is <code>floor.min(ceiling)</code>.
     <span class="chip test">tested</span>:
     <code>the_dock_grows_for_the_menu_and_the_prompt_but_never_past_half_the_pane</code>
+    (in <code>app.rs</code>, calling <code>dock_height(&amp;v, 30, None)</code>)
     pins 3, 7 and 15 at <code>room = 30</code>, and
     <code>degenerate_windows_are_survived</code> renders at 0&times;0, 1&times;1,
-    5&times;3, 24&times;8 and 200&times;2.
+    5&times;3, 24&times;8 and 200&times;2. Neither test covers the
+    <code>Some(w)</code> arm.
   </p>
 
   <div class="note warn">
@@ -575,7 +581,7 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
   <p>
     The carve, the latch and the dock height are no longer declared in
     <code>app.rs</code>. They sit in <code>crates/emma/src/term/layout.rs</code>,
-    440 lines, and <code>app.rs</code> imports them: line 77 of that file reads
+    442 lines, and <code>app.rs</code> imports them: line 77 of that file reads
     <code>dock_height, hidden, regions, Latch, Regions, SLIM_HEADER_ROWS,
     SLIM_STATUS_ROWS</code> from the module. So the functions this page quotes
     are the same functions, in a different file, and a reader grepping
@@ -621,16 +627,17 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>app.rs</code> is 1,076 lines and was read in full for this page. It
-    declares 19 function items above the test boundary: <code>hidden</code>,
-    <code>regions</code>, <code>dock_height</code>, twelve <code>App</code>
-    methods (<code>new</code>, <code>push_block</code>, <code>push_user</code>,
-    <code>stream</code>, <code>page</code>, <code>toggle_sidebar</code>,
-    <code>click</code>, <code>set_tools</code>, <code>set_identity</code>,
-    <code>render</code>, <code>hint</code>, <code>header</code>), and four free
-    functions (<code>builtin_rows</code>, <code>tool_rows</code>,
-    <code>keymap</code>, <code>stem</code>). All five constants and both types
-    are named above. Twelve of its twenty tests are cited.
+    <span class="chip unv">unverified</span> <code>app.rs</code> was 1,076 lines
+    when this page was written and was read in full at that size, with 19
+    function items named above the test boundary. It is
+    <code>wc -l crates/emma/src/term/app.rs</code> &rarr; 2026-09-06,
+    <strong>8,642 lines</strong> now, roughly eight times the size, and the
+    function list above was never re-walked against that growth. Which of the
+    named functions still exist, and how much of the file they now cover, is
+    not settled here.
+    <em>What would settle it:</em>
+    <code>grep -c '^pub fn \|^fn \|^    pub fn \|^    fn ' crates/emma/src/term/app.rs</code>
+    against the 19 cited here, and a fresh pass naming what the rest do.
   </p>
 
   <p>

@@ -197,6 +197,60 @@ pub fn no_results_line(what: &str, readiness: Readiness) -> String {
     }
 }
 
+/// The last thing every renderer in this file does: the header, the body, the
+/// one-line display, and the cut if there was one.
+///
+/// **This exists because the tail was written five times and one copy was
+/// wrong.** `render.rs` used the bare `ToolOutcome::truncated()` — what
+/// `tool-api` calls "the weaker form … never the preferred one for a new tool" —
+/// so a cut reached the model with no cap, no loss and no remedy, and `agent.rs`
+/// apologised on the tool's behalf for a limit the tool had known all along. A
+/// truncation that has to be *admitted the right way* is a rule about all of
+/// them, so there is now one door: pass `cut` and the reason goes on, or pass
+/// `None` and there was no cut. A renderer that has not been written yet gets
+/// the rule by using this.
+///
+/// `display` is an `Option` because `diagnostics` deliberately has none — its
+/// count is already the first line of the body — and inventing one here would
+/// change what the transcript shows for a tool nobody asked to change.
+fn finish(
+    server: &Server,
+    readiness: Readiness,
+    health: Option<&str>,
+    body: &str,
+    display: Option<String>,
+    cut: Option<String>,
+) -> ToolOutcome {
+    let mut outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)));
+    if let Some(display) = display {
+        outcome = outcome.with_display(display);
+    }
+    match cut {
+        Some(why) => outcome.truncated_because(why),
+        None => outcome,
+    }
+}
+
+/// The type and the doc comment, or the sentence for their absence.
+///
+/// Rendered here rather than in `Hover::run` because it was the one answer in
+/// the crate that assembled its own empty-result sentence, and the rule that
+/// decides that sentence — [`no_results_line`] — is this module's rule. A copy
+/// of it living in the tool layer is a copy that can be tidied into a plain
+/// string by somebody who has not read this file.
+pub fn hover(
+    server: &Server,
+    readiness: Readiness,
+    health: Option<&str>,
+    value: &Value,
+) -> ToolOutcome {
+    // Emptiness is a result — but only a meaningful one when the index was
+    // complete, so the same rule as everywhere else applies and the same
+    // function decides the sentence.
+    let body = hover_text(value).unwrap_or_else(|| no_results_line("type information", readiness));
+    finish(server, readiness, health, &body, None, None)
+}
+
 /// Locations, grouped by file, each with its source line.
 pub fn locations(
     root: &Path,
@@ -294,23 +348,20 @@ pub fn locations(
         ));
     }
 
-    let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
-        .with_display(format!("{} {what}", inside.len()));
-    if capped {
-        // `truncated_because`, not the bare `truncated()`. `tool-api` calls the
-        // bare form "the weaker form … never the preferred one for a new tool",
-        // and it was in use here: the flag reached the model with no reason
-        // attached, so `agent.rs` appended its generic "this tool did not say
-        // which limit cut it" fallback. The tool knew the cap and the loss all
-        // along and was not passing them on.
-        outcome.truncated_because(format!(
-            "{MAX_LOCATIONS} of {} {what} shown; the rest are not here. No argument raises that \
-             — ask a narrower question, or Grep for the symbol to see every hit",
-            inside.len()
-        ))
-    } else {
-        outcome
-    }
+    finish(
+        server,
+        readiness,
+        health,
+        &body,
+        Some(format!("{} {what}", inside.len())),
+        capped.then(|| {
+            format!(
+                "{MAX_LOCATIONS} of {} {what} shown; the rest are not here. No argument raises \
+                 that — ask a narrower question, or Grep for the symbol to see every hit",
+                inside.len()
+            )
+        }),
+    )
 }
 
 /// A source line, clipped so one line of generated code cannot fill a result.
@@ -412,17 +463,20 @@ pub fn symbols(
         body
     };
 
-    let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
-        .with_display(format!("{} symbols", lines.len()));
-    if capped {
-        outcome.truncated_because(format!(
-            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises \
-             that — narrow the query, or Grep the file to see every symbol in it",
-            lines.len()
-        ))
-    } else {
-        outcome
-    }
+    finish(
+        server,
+        readiness,
+        health,
+        &body,
+        Some(format!("{} symbols", lines.len())),
+        capped.then(|| {
+            format!(
+                "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises \
+                 that — narrow the query, or Grep the file to see every symbol in it",
+                lines.len()
+            )
+        }),
+    )
 }
 
 /// LSP `SymbolKind` is an integer. Named rather than printed, because "6" tells
@@ -500,29 +554,28 @@ pub fn diagnostics(
     waited: std::time::Duration,
     items: Option<Vec<Value>>,
 ) -> ToolOutcome {
-    let head = header(server, readiness, health);
     let shown = path::display(root, file);
+    let say = |body: String| finish(server, readiness, health, &body, None, None);
 
     let Some(items) = items else {
-        return ToolOutcome::new(format!(
-            "{head}\nThe language server published no diagnostics for {shown} within \
-             {:.1}s. That is not a clean result: it means the server did not answer, not \
-             that the file has no problems. Wait and ask again, or raise the wait with \
-             {}.",
+        return say(format!(
+            "The language server published no diagnostics for {shown} within {:.1}s. That is \
+             not a clean result: it means the server did not answer, not that the file has no \
+             problems. Wait and ask again, or raise the wait with {}.",
             waited.as_secs_f64(),
             crate::client::DIAGNOSTICS_WAIT_ENV
         ));
     };
 
     if items.is_empty() {
-        return ToolOutcome::new(format!(
-            "{head}\nThe language server reported no problems in {shown}. This one is an \
-             answer: it published an empty diagnostic set for this file."
+        return say(format!(
+            "The language server reported no problems in {shown}. This one is an answer: it \
+             published an empty diagnostic set for this file."
         ));
     }
 
     let total = items.len();
-    let mut out = format!("{head}\n{total} diagnostic(s) in {shown}:");
+    let mut out = format!("{total} diagnostic(s) in {shown}:");
     for item in items.iter().take(MAX_DIAGNOSTICS) {
         // 0-based on the wire, 1-based everywhere a human or a model reads it,
         // which is the same conversion `doc` does in the other direction.
@@ -547,19 +600,22 @@ pub fn diagnostics(
             clip(message)
         ));
     }
-    // A cut that names the cap, the loss and the remedy, in the same shape the
-    // two renderers above use. `truncated_because` and not the bare
-    // `truncated()`: `tool-api` calls that the weaker form, and a flag with no
-    // reason makes `agent.rs` apologise on the tool's behalf for a limit the
-    // tool knew all along.
-    if total > MAX_DIAGNOSTICS {
-        return ToolOutcome::new(out).truncated_because(format!(
-            "{MAX_DIAGNOSTICS} of {total} diagnostics shown; the rest are not here. No \
-             argument raises that — fix these and ask again, since a server usually \
-             reports far fewer once the first errors are gone"
-        ));
-    }
-    ToolOutcome::new(out)
+    // A cut that names the cap, the loss and the remedy, through the one door
+    // every renderer here uses. See [`finish`] for why there is only one.
+    finish(
+        server,
+        readiness,
+        health,
+        &out,
+        None,
+        (total > MAX_DIAGNOSTICS).then(|| {
+            format!(
+                "{MAX_DIAGNOSTICS} of {total} diagnostics shown; the rest are not here. No \
+                 argument raises that — fix these and ask again, since a server usually \
+                 reports far fewer once the first errors are gone"
+            )
+        }),
+    )
 }
 
 // endregion: Diagnostics
@@ -1114,6 +1170,52 @@ mod tests {
         );
     }
 
+    /// **An empty list the server called incomplete must not be read as "there
+    /// is nothing here".**
+    ///
+    /// What breaks if this fails: the two are the same JSON but opposite
+    /// answers. `isIncomplete: true` with no items means the server stopped
+    /// before it found anything — type more — while "no completions found …
+    /// there are none" is a claim that nothing at all can be typed at this
+    /// point, which a model acts on by rewriting the code around it. This is the
+    /// crate's readiness rule one field over, and the branch got it wrong until
+    /// somebody read it: a ready server plus an empty incomplete list took the
+    /// `no_results_line` path and claimed the confident answer.
+    #[test]
+    fn an_empty_but_incomplete_list_says_the_server_stopped_early() {
+        let out = completions(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({ "isIncomplete": true, "items": [] }),
+        );
+        assert!(
+            !out.content.contains("there are none"),
+            "an incomplete answer was rendered as a complete one: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("called its own answer incomplete"),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("Type more"), "{}", out.content);
+
+        // The control, and it is the whole point: the *same* empty list without
+        // the flag is still allowed to be the answer it is.
+        let complete = completions(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({ "isIncomplete": false, "items": [] }),
+        );
+        assert!(
+            complete.content.contains("there are none"),
+            "a complete empty list must still be allowed to answer: {}",
+            complete.content
+        );
+    }
+
     /// **The active signature is marked and its active parameter is named.**
     ///
     /// What breaks if this fails: signature help answers exactly one question —
@@ -1400,8 +1502,15 @@ mod truncation_honesty {
 
     use super::*;
 
-    /// Neither renderer may report a cut without saying which cap and what to
+    /// No renderer may report a cut without saying which cap and what to
     /// do — asserted on the **outcome**, not on the source text.
+    ///
+    /// It said "neither renderer" and covered two of the three that can cut;
+    /// `completions` was written afterwards and never added, which is exactly
+    /// the drift the module doc below claims this test does not have. All three
+    /// are here now, and a fourth still has to be added by hand — what
+    /// [`finish`] buys is that a new renderer cannot reach the weak
+    /// `truncated()` spelling at all, not that it is tested for free.
     ///
     /// **The source grep this replaces could not fail for the mutation that
     /// matters.** It asserted `!source.contains("outcome.truncated()")`, one
@@ -1421,7 +1530,7 @@ mod truncation_honesty {
     /// survives every spelling, every refactor, and a renderer that has not
     /// been written yet, as long as it is called here.
     #[test]
-    fn neither_renderer_reports_a_cut_without_naming_the_cap_and_the_remedy() {
+    fn no_renderer_reports_a_cut_without_naming_the_cap_and_the_remedy() {
         fn assert_honest(out: &ToolOutcome, which: &str) {
             assert!(out.truncated, "{which}: the cut was not flagged at all");
             let reason = out
@@ -1473,6 +1582,14 @@ mod truncation_honesty {
             .collect();
         let out = locations(&root, &server, readiness, None, "references", found);
         assert_honest(&out, "locations");
+
+        // Completions, over the cap. The renderer that was missing from this
+        // test entirely.
+        let items: Vec<Value> = (0..MAX_COMPLETIONS + 5)
+            .map(|i| serde_json::json!({ "label": format!("item{i:03}") }))
+            .collect();
+        let out = completions(&server, readiness, None, &Value::Array(items));
+        assert_honest(&out, "completions");
 
         // The positive control, and it is doing real work: a renderer that
         // flagged everything truncated would satisfy every assertion above.
@@ -1576,7 +1693,20 @@ pub fn completions(
     value: &Value,
 ) -> ToolOutcome {
     let (items, incomplete) = parse_completions(value);
-    let body = if items.is_empty() {
+    let body = if items.is_empty() && incomplete {
+        // **An empty list the server called incomplete is not "there is nothing
+        // here".** `no_results_line` would say "there are none" whenever the
+        // index was complete, and that is a claim about the language: it would
+        // tell a model that nothing at all can be typed at this point. What the
+        // server actually said is that it stopped early, which is the same
+        // "type more" it says about a full-but-truncated list. Found by reading
+        // the branch rather than by a failure, because the two are the same
+        // shape on the wire — the readiness rule one field over.
+        "No completions came back, and the server called its own answer incomplete — so this \
+         is not an answer: it stopped early rather than finding nothing. Type more of the \
+         word and ask again."
+            .to_string()
+    } else if items.is_empty() {
         no_results_line("completions", readiness)
     } else {
         let mut lines: Vec<String> = Vec::new();
@@ -1616,18 +1746,21 @@ pub fn completions(
         body
     };
 
-    let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
-        .with_display(format!("{} completions", items.len()));
-    if items.len() > MAX_COMPLETIONS {
-        outcome.truncated_because(format!(
-            "{MAX_COMPLETIONS} of {} completions shown, in the server's own order of \
-             relevance. No argument raises that -- ask at a position with more of the word \
-             typed, which is what narrows a completion list",
-            items.len()
-        ))
-    } else {
-        outcome
-    }
+    finish(
+        server,
+        readiness,
+        health,
+        &body,
+        Some(format!("{} completions", items.len())),
+        (items.len() > MAX_COMPLETIONS).then(|| {
+            format!(
+                "{MAX_COMPLETIONS} of {} completions shown, in the server's own order of \
+                 relevance. No argument raises that -- ask at a position with more of the word \
+                 typed, which is what narrows a completion list",
+                items.len()
+            )
+        }),
+    )
 }
 
 /// The signatures a call could be, and which argument the position is in.
@@ -1669,8 +1802,16 @@ pub fn signatures(
             lines.join("\n")
         }
     };
-    ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health))).with_display(
-        format!("{count} signature{}", if count == 1 { "" } else { "s" }),
+    finish(
+        server,
+        readiness,
+        health,
+        &body,
+        Some(format!(
+            "{count} signature{}",
+            if count == 1 { "" } else { "s" }
+        )),
+        None,
     )
 }
 
