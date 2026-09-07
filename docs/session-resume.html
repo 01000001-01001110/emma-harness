@@ -191,10 +191,13 @@ pub fn locate(dir: &amp;Path, id: Option&lt;&amp;str&gt;, cwd: &amp;Path) -&gt; 
     first that has a <code>goal</code> record from this directory. In a
     directory where roughly half the files are empty and nothing recent ran
     here, that is a read of every file: 103 files at the last count, 48 of them
-    zero bytes. Cost scales with the directory, not with a constant. Unlike the
-    first-run scan on
-    <a href="session-continuity.html">Continuity</a>, the module doc names
-    that as the first of three things that would justify a database.
+    zero bytes. The cost grows with the directory.
+  </p>
+
+  <p>
+    The <a href="session-continuity.html">first-run scan</a> caps itself at
+    fifty files and this does not, which is why the module doc names this walk
+    as the first of the three things that would justify a database.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>locate</code>, module doc</span>
 
@@ -478,7 +481,7 @@ pub fn restore_records(records: &amp;[Value]) -&gt; Resumed {
 
   <p>
     <strong>No tool is replayed.</strong> The region header in
-    <code>session.rs</code> states explicitly that tools are not replayed.
+    <code>session.rs</code> says so, and gives the reason.
   </p>
 
   <pre><code><span class="c">// crates/emma/src/session.rs — the Resume region header</span>
@@ -529,8 +532,9 @@ let mut query: Vec&lt;Message&gt; = open_query(resumed.messages, opening);</code
     A restored prefix pays full price on every call of the resumed goal instead
     of the 0.1× cache read it would otherwise get. A resume that comes back over
     <code>max_context</code> runs that goal at that size because compaction
-    works in whole chapters and the restored block is one chapter. Neither
-    failure stops the run. Guessing the split wrong would.
+    works in whole chapters and the restored block is one chapter. Both of those
+    cost money and neither stops the run, which is the trade against guessing
+    the split wrong and sending a message list the API refuses.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>open_query</code>; <a href="loop-one-turn.html">One turn</a></span>
 
@@ -590,12 +594,16 @@ term.note(&amp;format!(
     <strong>What survives is the approval grants, and they are not this method's
     to touch.</strong> They live in <code>Approvals</code>, which belongs to the
     process. A grant is a person saying yes to this tool in this working tree
-    for this sitting, and the person is still sitting there; dropping the grants
+    for this sitting, and the person is still sitting there. Dropping the grants
     would re-ask questions they answered ten minutes ago and teach them to
-    answer without reading. <code>turn_seq</code> survives too, for
+    answer without reading.
+  </p>
+
+  <p>
+    <code>turn_seq</code> survives too, for
     <code>/clear</code>'s reason turned around: turn ids have to be unique inside
     one file, and this process is now writing into a file that already has turns
-    in it. What does not survive is the goal budget, which comes back from the
+    in it. The goal budget does not survive. It comes back from the
     restored file rather than from the conversation being left, exactly as
     <code>--resume</code> restores it.
   </p>
@@ -608,10 +616,13 @@ term.note(&amp;format!(
     delete, which <code>OpenOptions</code> does not do. So
     <code>SessionLog::move_to</code> opens the destination, writes a
     <code>session_moved</code> record into the file being left, and then drops
-    the old handle. Two files, both kept, one writer moving between them. The
-    new handle is opened before the old one is given up, so a destination that
-    cannot be opened leaves the log where it was rather than in a session with
-    nowhere to write.
+    the old handle. Two files, both kept, one writer moving between them.
+  </p>
+
+  <p>
+    The new handle is opened before the old one is given up, so a destination
+    that cannot be opened leaves the log where it was rather than in a session
+    with nowhere to write.
     <span class="chip test">tested</span>:
     <code>both_files_are_still_there_afterwards_and_neither_was_renamed</code>,
     <code>moving_ends_one_file_and_appends_to_the_other</code>, and
@@ -626,12 +637,15 @@ term.note(&amp;format!(
     The abandoned file gets the last word. Its <code>session_moved</code> record
     names the destination and is the last line it will ever have, so a human
     reading it later, or an <code>emma --resume</code> of it, finds a session
-    that stops rather than one that was truncated. The fold needs no arm for
-    that record, because everything above it is still that session's
-    conversation and a later resume must get all of it back; and it needs no arm
-    for the <code>resumed</code> record either, which is the sharper of the two:
-    the messages that record counts are already in the file, above the line, so
-    an arm that replayed them would hand back the conversation twice.
+    that stops rather than one that was truncated.
+  </p>
+
+  <p>
+    The fold needs no arm for that record, because everything above it is still
+    that session's conversation and a later resume must get all of it back. It
+    needs no arm for the <code>resumed</code> record either, and that one is
+    sharper: the messages that record counts are already in the file, above the
+    line, so an arm that replayed them would hand back the conversation twice.
     <span class="chip test">tested</span>:
     <code>a_moved_record_costs_the_fold_nothing</code> exists to stop somebody
     adding an arm later on the reasonable-sounding grounds that every other
@@ -646,10 +660,14 @@ term.note(&amp;format!(
     the directory sentence when it differs from this one, what was kept, and
     every continuity difference (instructions, tools, model) as a warning. A
     damaged session says it came back short, from the fold's own damage list
-    rather than from a second opinion. That last part is a lesson taken from the
-    process-boundary resume, which computed the same note and for a while printed
-    nothing: the damage was on the value, the value went into the loop, and a
-    resumed run quietly missing turns looked entirely normal.
+    rather than from a second opinion.
+  </p>
+
+  <p>
+    That last part comes from the process-boundary resume, which computed the
+    same note and for a while printed nothing. The damage was on the value, the
+    value went into the loop, and a resumed run quietly missing turns looked
+    entirely normal.
     <span class="chip test">tested</span>:
     <code>resume_in_place_swaps_the_conversation_and_the_fold_still_matches_it</code>,
     <code>a_damaged_session_picked_up_in_place_says_it_came_back_short</code>,

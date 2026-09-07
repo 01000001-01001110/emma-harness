@@ -210,9 +210,9 @@ pub fn differences(
 
   <p>
     Each line names the field, the old value, the new one and what the
-    difference costs. The cost sentences explain what each change means: a hash
-    pair tells a user something changed and not what it means for the conversation
-    they are about to continue. An empty recorded value produces no line, so a
+    difference costs. The cost sentence is what a hash pair cannot give: a pair
+    of hashes tells a user something changed and not what it means for the
+    conversation they are about to continue. An empty recorded value produces no line, so a
     file from before a field existed is silent rather than noisy.
     <span class="chip test">tested</span>
     <code>resuming_into_a_changed_harness_names_what_changed</code> in
@@ -305,7 +305,7 @@ const FIRST_RUN_SCAN: usize = 50;</code></pre>
   </p>
 
   <p>
-    The trade is stated rather than hidden. A session that ran here long enough
+    A session that ran here long enough
     ago falls off the end of the window and the welcome is shown again, which is
     why <code>reason</code> says "no recent session was recorded from this
     directory" and not "you have never worked here".
@@ -409,7 +409,7 @@ impl FirstRun {
     is the case the welcome targets: a session recorded from elsewhere yields <code>NoneFromHere</code>, and once something
     has run here the answer becomes <code>None</code>.
     <code>each_reason_says_which_one_it_was</code> asserts the two sentences
-    differ in the way a reader needs.
+    differ in the way you need them to.
   </p>
   <span class="src">crates/emma/src/session.rs — the first-run tests</span>
 

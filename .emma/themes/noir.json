@@ -1,0 +1,23 @@
+{
+  "name": "noir",
+  "about": "For a dark terminal, measured against #141414. Black-and-white film with one warm light in it: nothing on screen is saturated, and the accent is the only thing that is a colour at all. The discipline that makes it work is that the six source roles separate on lightness and a half-degree of tint rather than on hue — a rose-grey keyword, an olive string, a steel type — which is why they still clear dE*ab 22 from each other with none of them above about a fifth of full chroma.",
+  "roles": {
+    "dim":      { "hex": "#8a857e", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#b9cabb", "ansi16": "green" },
+    "err":      { "hex": "#c17371", "ansi16": "light_red" },
+    "warn":     { "hex": "#ddd29d", "ansi16": "yellow" },
+    "info":     { "hex": "#a8b7c6", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#e0a05a", "ansi16": "light_yellow" },
+    "ground":   { "hex": "#141414", "ansi16": "black" },
+    "comment":  { "hex": "#6d6a64", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#c1b3b8", "ansi16": "white" },
+    "string":   { "hex": "#8c9a74", "ansi16": "green" },
+    "number":   { "hex": "#c5b167", "ansi16": "yellow" },
+    "type":     { "hex": "#8b98bb", "ansi16": "cyan" },
+    "function": { "hex": "#f5f4ef", "ansi16": "light_yellow" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#242220" }
+  }
+}

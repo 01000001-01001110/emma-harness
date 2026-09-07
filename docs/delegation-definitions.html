@@ -81,16 +81,16 @@
     startup, and the two uses have opposite selection rules. A persona is chosen
     by the operator, once, and a typo in it is worth refusing to boot over. An
     <code>AgentDef</code> is chosen by the model from a closed list, out of a
-    directory somebody accumulated over months. So they have separate accessors
+    directory you accumulated over months. So they have separate accessors
     in <code>Harness</code> and no function takes a boolean saying which it is.
   </p>
   <span class="src">crates/harness/src/lib.rs — Harness::agent_types, Harness::persona</span>
 
   <p>
-    This page covers the agents half of <code>claude.rs</code>: six functions
-    and two types. The other half of that file, <code>settings.json</code> and
-    hook translation, belongs to
-    <a href="config.html">Configuration</a> and is not read here.
+    The agents half of <code>claude.rs</code> is six functions and two types.
+    The other half of that file, <code>settings.json</code> and hook
+    translation, belongs to <a href="config.html">Configuration</a> and was not
+    read for this page.
   </p>
 
   <h2 id="front">The four keys that are read</h2>
@@ -166,10 +166,10 @@ pub(crate) struct AgentFront {
   <p>
     <code>AgentFront</code> must never gain <code>deny_unknown_fields</code>.
     Measured against a real 90-file library, <code>category</code> and
-    <code>version</code> appear throughout, and under a strict struct every one
-    The whole crate applies the same ruling in two other places: refusing to
-    start over a key belonging to another program is an outage, not a safety
-    property.
+    <code>version</code> appear throughout, and under a strict struct every file
+    carrying one would fail to parse. The crate applies the same ruling in two
+    other places. Refusing to start over a key belonging to another program is
+    an outage, not a safety property.
   </p>
   <span class="src">crates/harness/src/claude.rs — AgentFront, Settings, module doc</span>
 
@@ -386,15 +386,19 @@ pub(crate) fn agent_path(root: &amp;Path, name: &amp;str) -&gt; PathBuf {
 
   <p>
     There is no user scope for agent files, which is the part most likely to
-    surprise someone arriving from Claude Code. <code>discover</code> walks up
-    from the working directory the way git looks for <code>.git</code>; the
+    catch you out if you arrive from Claude Code. <code>discover</code> walks up
+    from the working directory the way git looks for <code>.git</code>. The
     nearest ancestor wins, and within one directory <code>.emma/</code> beats
-    <code>.claude/</code> outright, never merged. At the home directory the rules
-    change: <code>~/.claude/</code> is skipped so completely it never reaches the
-    list of places searched. It is another program's user-scope configuration,
-    and adopting it would hand Emma standing instructions from a directory the
-    user never associated with this project. Permission rules are the one
-    exception, and only the <code>deny</code> list; see
+    <code>.claude/</code> outright, never merged.
+  </p>
+
+  <p>
+    At the home directory the rules change. <code>~/.claude/</code> is skipped so
+    completely it never reaches the list of places searched. It is another
+    program's user-scope configuration, and adopting it would hand Emma standing
+    instructions from a directory you never associated with this project.
+    Permission rules are the one exception, and only the <code>deny</code> list;
+    see
     <a href="consent-rules.html">Permission rules</a>.
   </p>
   <span class="src">crates/harness/src/lib.rs — discover_in; crates/emma/src/permissions.rs</span>
@@ -466,8 +470,8 @@ pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentD
     reported rather than swallowed: the file could not be read, its frontmatter
     could not be parsed, it declared a <code>name</code> that disagrees with its
     stem (noted, but still offered), or it has no <code>description</code>. The
-    notes reach the operator through <code>emma config check</code> and the
-    startup banner.
+    notes reach you through <code>emma config check</code> and the startup
+    banner.
   </p>
 
   <h3 id="note-defect">A defect in the note itself</h3>

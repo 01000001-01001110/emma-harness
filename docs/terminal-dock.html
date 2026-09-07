@@ -107,9 +107,9 @@
 
   <div class="note warn">
     <p>
-      That is not a stale-input annoyance. One question is answered by a
-      keystroke aimed at another. It matters most at the approval gate, where the
-      line in question is a <code>y</code>.
+      The cost is one question answered by a keystroke aimed at another. It
+      matters most at the approval gate, where the line in question is a
+      <code>y</code>.
     </p>
     <p>
       <span class="chip obs">observed</span>, on the first real run, and
@@ -186,8 +186,7 @@
     Four classes of keystroke are consumed reader-locally and never become a
     line: the pane keys, the tool chords, the four menu keys, and every mouse
     event. Each mutates view state through the frame and returns, so a scroll
-    cannot become a line and the drain guarantee is untouched because those
-    keystrokes never enter the channel.
+    cannot become a line and the drain has nothing of theirs to reach.
   </p>
 
   <p>
@@ -199,8 +198,8 @@
   <h2 id="editor">The line editor</h2>
 
   <p>
-    Fifteen match arms and a paste handler. The scope is deliberate: every key
-    here is one a user would expect. History, completion, and word motion beyond
+    Fifteen match arms and a paste handler. Every key here is one you would
+    expect. History, completion, and word motion beyond
     <code>Ctrl-W</code> belong in a text editor, and Emma already has one as a
     tool.
   </p>
@@ -440,9 +439,8 @@
     Nothing is invented. The vocabulary is Emma's own
     <code>session_command::BUILTINS</code> plus whatever the harness loaded, in
     the harness's order, and a harness command with no description gets
-    <code>NO_DESCRIPTION</code> rather than a summary invented from prompt text.
-    A summary invented from prompt text describes a command that nobody wrote and
-    nobody can correct.
+    <code>NO_DESCRIPTION</code> rather than a summary invented from prompt text,
+    which would describe a command nobody wrote and nobody can correct.
     <span class="chip test">tested</span>:
     <code>the_menu_and_the_parser_agree_on_the_vocabulary</code> checks both
     directions, that every built-in has a row and that every row parses. That
@@ -453,8 +451,8 @@
     A name collision resolves to the built-in, and the project's row is marked
     rather than duplicated or dropped: two identical rows would read as a bug,
     and dropping it silently would hide the collision. That is the one place the
-    menu composes a sentence. What it composes is a fact about resolution, not a
-    summary of a file nobody wrote a description for.
+    menu composes a sentence, and what it composes is a fact about which command
+    won.
     <span class="chip test">tested</span>:
     <code>a_project_command_a_builtin_shadows_gets_one_marked_row_not_two</code>.
   </p>
@@ -520,7 +518,11 @@
     rather than grey, because a widget that is the same weight as its decoration
     reads as decoration. An empty box shows <code>menu::PLACEHOLDER</code>, since
     a new user's first question is what this takes and the answer was previously
-    nowhere except a note that had already scrolled away. The mockup's
+    nowhere except a note that had already scrolled away.
+  </p>
+
+  <p>
+    The mockup's
     <code>[send: Enter]</code> is drawn inside the right border only while it
     cannot collide with the typed line; a hint that overwrites the sentence it
     is hinting about is worse than none.
@@ -533,11 +535,14 @@
   <p>
     A box costs two rows, and on a short window those two rows are the
     difference between showing the command and showing nothing but a title and a
-    <code>[y]</code>. A prompt the user cannot evaluate manufactures consent; that
-    argument is older than this file. The decoration goes first and the title
-    becomes an ordinary line. The keys and the answer share the last row and are
-    laid out first: whatever else has to go, the way to answer the question does
-    not.
+    <code>[y]</code>. A prompt you cannot evaluate manufactures consent, and
+    that argument is older than this file.
+  </p>
+
+  <p>
+    So the decoration goes first and the title becomes an ordinary line. The
+    keys and the answer share the last row and are laid out first: whatever else
+    has to go, the way to answer the question does not.
     <span class="chip test">tested</span>:
     <code>the_shortest_viewport_drops_the_border_rather_than_the_evidence</code>
     at five rows asserts the title, the command and the keys are all present and
@@ -662,20 +667,29 @@
   </ul>
 
   <p>
-    <strong>Not settled here.</strong> Two things. The drain is proven over a
-    scripted queue and a hand-built editor; the <em>reader thread</em> that
-    fills them cannot be started by a test, because it owns a real terminal.
-    <strong>One of its arms is now driven anyway.</strong> The paste arm was
-    lifted out as <code>on_paste</code>, taking a narrow <code>Surface</code>
-    trait that <code>Frame</code> implements and a test satisfies with a
-    recorder, so what the arm <em>does</em> is asserted rather than only
-    what it decides. That distinction is the whole of <code>ARCH-003</code>: a
-    reviewer deleted the line carrying the paste note to the screen and the
-    entire workspace stayed green, because the decision had a test and the
-    effect had nowhere to be observed.
+    <strong>Not settled here.</strong> The drain is proven over a scripted queue
+    and a hand-built editor. The <em>reader thread</em> that fills them cannot be
+    started by a test, because it owns a real terminal.
+  </p>
+
+  <p>
+    One of its arms is driven anyway. The paste arm was lifted out as
+    <code>on_paste</code>, taking a narrow <code>Surface</code> trait that
+    <code>Frame</code> implements and a test satisfies with a recorder, so what
+    the arm <em>does</em> is asserted rather than only what it decides.
+  </p>
+
+  <p>
+    That distinction is the whole of <code>ARCH-003</code>: a reviewer deleted
+    the line carrying the paste note to the screen and the entire workspace
+    stayed green, because the decision had a test and the effect had nowhere to
+    be observed.
     <span class="chip test">tested</span>
     <code>a_paste_puts_its_note_on_the_surface_and_a_clean_one_puts_nothing</code>;
     deleting that line now turns it red.
+  </p>
+
+  <p>
     The other arms (keys, mouse, resize) are untouched, and the thread's one call
     to <code>on_paste</code> is itself still deletable with the suite green. The
     boundary moved rather than vanishing.

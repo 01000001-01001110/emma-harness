@@ -82,8 +82,8 @@
 
   <p class="lede">
     Emma recognises a <code>.claude/</code> directory so that a skill, a command
-    or an agent already written for Claude Code works without being rewritten.
-    This page covers what was not carried over, including the rule people most
+    or an agent you already wrote for Claude Code works without being rewritten.
+    Four things were not carried over, and one of them is the rule people most
     often get backwards:
     <strong>Emma does not adopt your global Claude Code configuration.</strong>
   </p>
@@ -99,8 +99,8 @@
 
   <p>
     The harness was ported from an earlier design, and its module doc opens by
-    listing what was changed rather than leaving a reader to discover the
-    differences one bug at a time.
+    listing what was changed, so you do not have to find the differences one bug
+    at a time.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · module doc, opening</p>
@@ -124,9 +124,8 @@
     <a href="config-discovery.html#notclaude">the discovery skip</a>,
     <a href="config-agents.html#unselected">the unselected-persona rule</a>,
     <a href="config-spine.html#tools">the tool allowlist</a>, and the strictness
-    ruling below. The first is listed first, and it is the one this chapter had
-    to be written carefully around, because the plausible guess is the opposite
-    of what the code does.
+    ruling below. The first one is listed first because the plausible guess is
+    the opposite of what the code does.
   </p>
 
   <h2 id="settings">What Emma reads out of <code>settings.json</code></h2>
@@ -174,11 +173,10 @@ pub(crate) struct Settings {
       silently-ignored key would cost something.
     </p>
     <p>
-      The consequence for a reader: a misspelling of any key at that level is
-      silence, including a misspelling of a key Emma <em>does</em> read. There is
-      no spelling check available here at all. The compensations that exist are
-      the strict inner blocks and <code>emma config check</code>, which prints
-      what was actually taken.
+      So a misspelling of any key at that level is silence, including a
+      misspelling of a key Emma <em>does</em> read. There is no spelling check
+      available here at all. What you get instead is the strict inner blocks and
+      <code>emma config check</code>, which prints what was actually taken.
     </p>
   </div>
 
@@ -428,7 +426,7 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
     another program is not Emma's to refuse to start over, and the only thing
     taken from it is restrictions, so failing to read it can only leave Emma
     asking more often. That argument covers refusing to <em>boot</em>. It does not
-    license silence. The operator wrote deny rules and believes they apply. The
+    license silence. You wrote deny rules and you believe they apply. The
     only report of their absence was <code>config check</code> printing
     <code>(none)</code>, which reads as "you have no rules", not as "your rules
     could not be read". One trailing comma was enough.
@@ -587,8 +585,8 @@ permissions    <span class="w">(none — every write, command and host is asked 
     <code>claude</code> binary and does not use the Agent SDK, decided
     2026-08-09 after the CLI was checked against version <code>2.1.226</code>
     rather than assumed. MCP servers are out of scope until there is a reason.
-    Neither decision is a gap in this chapter: they are why the compatibility
-    surface is a set of file formats rather than a protocol.
+    Both decisions are why the compatibility surface is a set of file formats and
+    not a protocol.
   </p>
   <span class="src">crates/harness/src/claude.rs (module doc)</span>
 

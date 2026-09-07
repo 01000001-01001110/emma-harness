@@ -368,10 +368,17 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
       <code>COLLAPSE_HINT</code>'s doc says <em>&ldquo;What it does <em>not</em>
       do is accept a click. The shell owns input, and until it routes a mouse
       press here this is a label for Ctrl-B, drawn where the mockup drew
-      it.&rdquo;</em> The shell routes exactly that press.
-      <code>App::click</code> hit-tests the SESSIONS header row and toggles the
-      sidebar, and <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
-      asserts it end to end. A reader of this file alone would conclude the
+      it.&rdquo;</em> The shell routes exactly that press, though not to the
+      collapse. <code>new_session_hit</code> gives the glyph's three columns,
+      <code>App::new_session_clicked</code> tests a press against the rectangle
+      the last paint recorded, and the press starts a fresh conversation;
+      <code>a_click_on_the_affordance_asks_for_a_new_conversation</code> and
+      <code>only_the_new_session_control_takes_a_click_and_it_is_where_it_was_drawn</code>
+      assert it, the second against the painted row rather than against
+      coordinates. So the doc is wrong twice: the <code>[+]</code> takes a
+      click, and it is no longer a label for <code>Ctrl-B</code> either.
+      <code>Ctrl-B</code> still collapses, but this control does something else.
+      A reader of this file alone would conclude the
       <code>[+]</code> is decorative, and until 2026-09-06 the second half of
       that was true as well: <a href="#hits"><code>hits</code></a> reported a
       rectangle for every clickable row and nothing consulted it. Both halves

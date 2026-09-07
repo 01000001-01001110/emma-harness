@@ -192,9 +192,8 @@
   </p>
 
   <p>
-    <code>EMMA_COLORS</code> still wins when set: someone who sets it is
-    looking at a terminal Emma guessed wrong about, and that is as true in this
-    direction as the other.
+    <code>EMMA_COLORS</code> still wins when set, in this direction as much as
+    the other.
     <span class="chip unv">unverified</span> against a real VT-less console: this
     is reasoned from <code>enable_vt</code>'s contract and exercised with the
     syscall stubbed, not observed on a console that genuinely refuses VT.
@@ -204,16 +203,19 @@
 
   <p>
     The environment is an argument rather than a global, which is what makes the
-    whole ladder testable; <code>Level::detect</code> is the one place that reads
-    the real process, and on Windows it does one thing before the ladder,
-    described below. The order is <em>&ldquo;so the honest signals beat the
-    hopeful ones&rdquo;</em>: an explicit override first, since the person
-    setting <code>EMMA_COLORS</code> is looking at a terminal Emma guessed wrong
-    about; then <code>NO_COLOR</code> and &ldquo;this is not a terminal at
-    all&rdquo;; then the environment's own claims.
-    <code>WT_SESSION</code> is the Windows Terminal case, which does 24-bit and
-    sets neither a useful <code>COLORTERM</code> nor a useful
-    <code>TERM</code>.
+    whole ladder testable. <code>Level::detect</code> is the one place that reads
+    the real process, and on Windows it does the one thing above before the
+    ladder runs.
+  </p>
+
+  <p>
+    The order is <em>&ldquo;so the honest signals beat the hopeful ones&rdquo;</em>:
+    an explicit override first, since the person setting
+    <code>EMMA_COLORS</code> is looking at a terminal Emma guessed wrong about;
+    then <code>NO_COLOR</code> and &ldquo;this is not a terminal at all&rdquo;;
+    then the environment's own claims. <code>WT_SESSION</code> is the Windows
+    Terminal case, which does 24-bit and sets neither a useful
+    <code>COLORTERM</code> nor a useful <code>TERM</code>.
   </p>
 
   <p>
@@ -234,8 +236,7 @@
     <code>Palette::with_theme</code> has no way to detect anything, so the
     property holds by signature.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
     <code>a_theme_chooses_colours_and_never_how_many_of_them_there_are</code>.
   </p>
 
@@ -276,12 +277,16 @@
     <strong>The last six arrived on 2026-09-06, when the Code page started
     colouring source from the language server.</strong> They sit in the same
     family as the eight above rather than importing another editor&rsquo;s
-    palette, so a file on that page looks like the rest of Emma. Two of the
-    choices carry an argument. A comment is dimmer than <code>Dim</code>,
-    because <code>Dim</code> is chrome a reader glances at and a comment is text
-    a reader is choosing not to read. And the keyword is the accent&rsquo;s hue
-    desaturated, so a screen of <code>let</code> and <code>fn</code> does not
-    compete with Emma&rsquo;s own chrome for attention. Function is blue, the
+    palette, so a file on that page looks like the rest of Emma.
+  </p>
+
+  <p>
+    Two of the choices carry an argument. A comment is dimmer than
+    <code>Dim</code>, because <code>Dim</code> is chrome you glance at and a
+    comment is text you are choosing not to read. And the keyword is the
+    accent&rsquo;s hue desaturated, so a screen of <code>let</code> and
+    <code>fn</code> does not compete with Emma&rsquo;s own chrome for attention.
+    Function is blue, the
     one family nothing else uses, so a call reads as its own thing beside the
     type it is called on.
   </p>
@@ -361,8 +366,7 @@
     <code>Color::Indexed</code>, neither of which can ever equal
     <code>Color::Reset</code>.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>, and its sibling
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>, and its sibling
     <code>ordinary_text_is_never_given_a_colour_at_any_fidelity</code> holds the
     <code>Role::Text</code> half at all four levels.
   </p>
@@ -427,8 +431,7 @@
 
   <p>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
     <code>the_selection_band_is_the_measured_pair_at_every_fidelity</code> pins
     all four, and closes with a property rather than a literal, that the band is
     never equal to <code>chip(Role::Accent)</code> at any fidelity. That is the
@@ -465,10 +468,13 @@
   </p>
 
   <p>
-    Only pairs come through this function, and only for their 256-colour half. A
-    role's index is <em>declared</em> by the theme, and the reason is measured
-    rather than asserted: the derivation reproduces five of the seven shipped
-    indices exactly and disagrees with two by a shade of the same hue.
+    Only pairs come through this function, and only for their 256-colour half.
+  </p>
+
+  <p>
+    A role's index is <em>declared</em> by the theme, and the reason was
+    measured: the derivation reproduces five of the seven shipped indices
+    exactly and disagrees with two by a shade of the same hue.
     <code>Err</code> derives to 203 where the customary Gruvbox terminal mapping
     is 167, and <code>Dim</code> to 246 where it is 245, one greyscale step.
     Both divergences are pinned by
@@ -478,7 +484,6 @@
     quietly change what Emma looks like.&rdquo;</em>
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   </p>
 
   <div class="note">
@@ -507,12 +512,16 @@
   <p>
     <code>Palette</code> is two fields, a <code>Level</code> and a
     <code>Theme</code>, and it is <code>Copy</code>. Fifty-five call sites
-    construct one and pass it by value (36 outside
+    construct one and pass it by value: 36 outside
     <code>term/palette.rs</code> itself, which holds the other 19.
     <span class="chip cert">certified</span>:
     <code>rg -n "Palette::new" crates/emma/src | wc -l</code> returns 55 on
     2026-09-01. The page said "roughly thirty" until then, which was a hedge
-    rather than a count. The <code>Skin</code> that holds one is stored in
+    rather than a count.
+  </p>
+
+  <p>
+    The <code>Skin</code> that holds one is stored in
     widgets across the module. A <code>Theme</code> holding a
     <code>String</code> would end that and cascade through every signature in
     <code>term/</code>, which is why themes are resolved to fixed-size data at
@@ -568,7 +577,6 @@
     so; nobody changes one by accident.&rdquo;</em>
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   </p>
 
   <p>
@@ -604,11 +612,14 @@
   </p>
 
   <p>
-    A borrowed accent is a name and a role, never a colour, and that is the whole
-    reason to spell it as a borrow. The swatch still comes out of the theme, so
-    the override survives a theme switch, degrades through <code>Level</code>
-    exactly as every other colour does, and cannot introduce a hex no theme
-    approved. The cube form gives that up on request: it is a literal index, so
+    A borrowed accent is a name and a role, never a colour. The swatch still
+    comes out of the theme, so the override survives a theme switch, degrades
+    through <code>Level</code> as every other colour does, and cannot introduce
+    a hex no theme approved.
+  </p>
+
+  <p>
+    The cube form gives that up on request: it is a literal index, so
     <code>cube_renderable</code> is false below <code>Level::Ansi256</code> and
     the picker does not offer the cube at all on a 16-colour terminal, where the
     theme's own accent is what is drawn.
@@ -625,6 +636,9 @@
     reason is the section below this one: a <code>Skin</code> is
     <code>Copy</code> and the viewport holds copies, so a picker that changes the
     accent later must not have to find them all.
+  </p>
+
+  <p>
     <code>main.rs</code> reads the stored value and calls
     <code>activate_accent_choice</code> before the first palette is built, so a
     saved choice applies from the first frame, and only a <em>live</em> palette

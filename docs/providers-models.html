@@ -82,7 +82,7 @@
   <p class="lede">
     Two of the values in a request are properties of the model rather than of
     the request, and getting either wrong is an HTTP 400 before a token is
-    generated. Both were single constants until a user could choose a model, at
+    generated. Both were single constants until you could choose a model, at
     which point the first call on the wrong choice failed for a reason nobody
     had asked about. A hundred lines of table and eleven lines of clamping is
     the whole answer.
@@ -105,8 +105,7 @@ pub struct Limits {
   <span class="src">crates/llm/src/models.rs — <code>Limits</code></span>
 
   <p>
-    The shape is not arbitrary. <code>GET /v1/models</code> reports both of
-    these per model, <code>max_tokens</code> as a field and the levels under
+    <code>GET /v1/models</code> reports both of these per model, <code>max_tokens</code> as a field and the levels under
     <code>capabilities.effort.&lt;level&gt;.supported</code>, so
     <code>Limits</code> is what that response parses into and a later discovery
     stage can replace the <em>lookup</em> without touching the clamping. That
@@ -175,8 +174,8 @@ const NO_XHIGH: &amp;[Effort] = &amp;[Effort::Low, Effort::Medium, Effort::High,
       are correct on that date and only that date.
       <span class="chip unv">unverified</span> No request has ever been sent to
       confirm one. Settling the whole table is one call:
-      <code>GET /v1/models</code> reports both values, with the key the user
-      already gave us, compared against these rows.
+      <code>GET /v1/models</code> reports both values, with the key you already
+      gave us, compared against these rows.
     </p>
   </div>
   <span class="src">crates/llm/src/models.rs — module doc</span>
@@ -199,7 +198,7 @@ pub fn limits(model: &amp;str) -&gt; Limits {
 
   <p>
     Prefix rather than equality, because the API accepts both the alias and the
-    dated spelling and a user pasting from the console gets the dated one.
+    dated spelling, and what you paste out of the console is the dated one.
     <code>claude-haiku-4-5-20251001</code> resolves to the same row as
     <code>claude-haiku-4-5</code>, which
     <code>a_dated_snapshot_resolves_to_its_alias</code> asserts, alongside the
@@ -248,9 +247,9 @@ pub const UNKNOWN: Limits = Limits {
     8,192 is the smallest output ceiling any Anthropic model has shipped with,
     so no known model rejects it, and the empty effort set means no
     <code>output_config</code> is sent, which every model accepts including the
-    two that reject the field. The cost is stated where the constant lives: a
-    user on a brand-new Opus gets 8,192 tokens and default effort until
-    somebody edits the file.
+    two that reject the field. The cost is stated where the constant lives. On
+    a brand-new Opus you get 8,192 tokens and default effort until somebody
+    edits the file.
   </p>
 
   <p>
@@ -403,8 +402,8 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
     <code>a_model_without_xhigh_is_never_sent_xhigh</code> and
     <code>a_model_with_no_effort_parameter_is_sent_no_output_config</code>,
     each reading the recorded request body from a loopback stub. The unit tests
-    pin the table; those     pin that the table is what the socket sees, which a wrong wiring would break
-    while table tests still passed.
+    pin the table. Those pin that the table is what the socket sees, which a
+    wrong wiring would break while the table tests still passed.
     <span class="chip test">tested</span>
   </p>
 
@@ -427,8 +426,8 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
   <span class="src">crates/llm/src/roster.rs — module doc, <code>fetch</code>, <code>OPENROUTER_BASE_URL</code></span>
 
   <p>
-    The trap it records is worth more than the endpoint. Measured against the
-    live roster on 2026-08-30, 396 models: filtering on the id suffix
+    What it records about free models matters more than the endpoint. Measured
+    against the live roster on 2026-08-30, 396 models: filtering on the id suffix
     <code>:free</code> returns 18, and filtering on
     <code>pricing.prompt</code> and <code>pricing.completion</code> both being
     zero returns 21, of which three cannot run a turn of Emma's loop because
@@ -470,7 +469,7 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
     over: an entry carrying a key this parser has never seen survives whole, and
     an entry that cannot be read costs that entry rather than the roster.
     <span class="chip unv">unverified</span> Whether a genuinely malformed
-    OpenRouter entry appears in practice is not known here. Capturing a live
+    OpenRouter entry ever turns up is not known here. Capturing a live
     response and feeding it to <code>Roster::parse</code> with one entry
     corrupted would show whether the rest survives, and that test is not in the
     file today.

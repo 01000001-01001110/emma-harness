@@ -139,7 +139,7 @@
     goal ended on turn one reported as <em>"answered, no tools were
     needed"</em>. <span class="chip cert">certified</span>: observed live on
     <code>claude-sonnet-5</code>, 2026-08-11, and the exact block is frozen as
-    a fixture a reader can grep, in
+    a fixture you can grep, in
     <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code>.
   </p>
 <div class="note warn">
@@ -153,7 +153,7 @@
     page was written about.
   </p>
   <p>
-    Streaming disagrees with batch about the same input. Reproduced against the
+    Streaming and batch disagree about the same input. Reproduced against the
     loopback stub on 2026-08-23:
   </p>
   <pre><code>batch  (tool_use with no `input`): Passthrough{…}      tool_calls = 0
@@ -164,14 +164,15 @@ stream (tool_use with no `name`):  ToolCall{name:"",…}  tool_calls = 1</code><
     is the unattended path</strong>; it is what <code>-p</code> uses, and
     what a script gets.
     <span class="chip unv">unverified</span> Whether the API can actually emit
-    either shape. The decoder's behaviour on them is measured; what the wire
-    does is not, and the honest position is that a decoder should not have two
-    answers for one input regardless.
+    either shape. The decoder's behaviour on them is measured, and what the wire
+    does is not. Either way, a decoder should not have two answers for one
+    input.
   </p>
   <p>
     Not pinned by a test. The only assertion available today is
     "the two modes disagree", which is a receipt for a defect rather than a
-    guarantee, and writing it would make the disagreement harder to remove.
+    guarantee, and writing it would make the disagreement harder to remove
+    later.
   </p>
 </div>
 
@@ -373,19 +374,19 @@ pub fn from_value(v: Value) -&gt; Self {
     <code>extra</code> is written only by <code>from_value</code>, read only by
     <code>to_value</code>, and nothing branches on its contents. A key Emma
     needs to <em>act</em> on becomes a field promoted out of it rather than a
-    lookup into it. That rule is what keeps the map from being
-    <code>raw_content</code> at a smaller scale, and the module doc states it
-    exhaustively: keys the provider put on a block whose type this client
-    models, which this client does not read. Nothing else.
+    lookup into it. That rule is what keeps the map from turning into
+    <code>raw_content</code> at a smaller scale. The module doc gives the whole
+    of what may live there: keys the provider put on a block whose type this
+    client models, which this client does not read. Nothing else.
   </p>
 
   <p>
     Why per-block <code>Passthrough</code> rather than goose's
     <code>ProviderMetadata</code> for the unknown-type case: that hangs a map
     off every block for any key a provider wants back, so every typed block has
-    an untyped half and a reader cannot tell from the type which fields are
-    real. A block here is either fully typed or fully opaque. The cost is that
-    one unmodelled field demotes a whole block; the benefit is that
+    an untyped half and you cannot tell from the type which fields are real. A
+    block here is either fully typed or fully opaque. The cost is that one
+    unmodelled field demotes a whole block. What you get for it is that
     <code>ContentBlock::Text</code> means what it says.
   </p>
   <span class="src">crates/llm/src/content.rs — <code>ContentBlock::Passthrough</code> doc</span>
@@ -413,11 +414,11 @@ pub struct ThinkingBlock {
 
   <p>
     <code>signature</code> is the field that must round-trip unchanged. Emma never
-    reads it, never composes one, never re-derives one. It
-    is an <code>Option</code> rather than goose's bare <code>String</code>
-    because a streamed block that carried no <code>signature_delta</code> has
-    no signature, and sending <code>"signature": ""</code> is not the same
-    request as sending no key at all. The round-trip test asserts both shapes,
+    reads it, never composes one, never re-derives one. It is an
+    <code>Option</code> rather than goose's bare <code>String</code> because a
+    streamed block that carried no <code>signature_delta</code> has no
+    signature, and sending <code>"signature": ""</code> is a different request
+    from sending no key at all. The round-trip test asserts both shapes,
     signed and unsigned. <span class="chip test">tested</span>
   </p>
 
@@ -558,7 +559,7 @@ pub fn is_model_bound(&amp;self) -&gt; bool {
   <span class="src">crates/llm/src/content.rs — <code>is_model_bound</code></span>
 
   <p>
-    Nothing calls it yet. It exists so a question stays answerable: whether a
+    Nothing calls it yet. It exists so a question stays answerable. Whether a
     thinking signature minted by one model is accepted when the conversation
     continues on another is untested here, and an in-session
     <code>/model</code> command is the first thing that would need to know.
@@ -580,7 +581,7 @@ pub fn is_model_bound(&amp;self) -&gt; bool {
     and the match arms disagree, and the match arms are what runs.
   </p>
 
-  <h2 id="content-enum">A message's content is two shapes, not one</h2>
+  <h2 id="content-enum">A message's content takes two shapes</h2>
 
   <p class="faint">crates/llm/src/content.rs · <code>enum Content</code></p>
   <pre><code>/// Two variants because the API takes two forms and Emma sends both: a user's

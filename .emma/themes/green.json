@@ -1,0 +1,23 @@
+{
+  "name": "green",
+  "about": "For a dark terminal, measured against #06170f — a forest black. The hue is the character of the room, not a coat of paint on every glyph: ground and accent carry it, and the six source roles keep the hue spread a reader needs to tell a string from a comment.",
+  "roles": {
+    "dim":      { "hex": "#7d9b85", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#62d980", "ansi16": "light_green" },
+    "err":      { "hex": "#ff8069", "ansi16": "light_red" },
+    "warn":     { "hex": "#e8c56a", "ansi16": "light_yellow" },
+    "info":     { "hex": "#6fd8c0", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#3ddc84", "ansi16": "light_green" },
+    "ground":   { "hex": "#06170f", "ansi16": "black" },
+    "comment":  { "hex": "#5f7d68", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#c9e35c", "ansi16": "yellow" },
+    "string":   { "hex": "#7ee0a7", "ansi16": "green" },
+    "number":   { "hex": "#eeb45c", "ansi16": "light_yellow" },
+    "type":     { "hex": "#63d6d0", "ansi16": "cyan" },
+    "function": { "hex": "#b6a4f0", "ansi16": "magenta" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#0f2a1c" }
+  }
+}

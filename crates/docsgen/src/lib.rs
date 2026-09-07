@@ -35,8 +35,10 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 pub mod architecture;
+pub mod citations;
 pub mod coverage;
 pub mod pages;
+pub mod quote;
 pub mod rust;
 pub mod shapes;
 pub mod svg;
@@ -48,6 +50,17 @@ pub mod theme;
 /// is between these two lines.
 pub const OPEN: &str = "<!-- diagram:";
 pub const CLOSE: &str = "<!-- /diagram -->";
+
+/// The comment pair a quoted source block lives between.
+///
+/// A second word rather than a second injector: `quote:` and `diagram:` are
+/// injected by the same function, checked by the same `stale`, and written by
+/// the same command. They are spelled differently because a reader looking at
+/// the page should be able to tell a picture drawn from the source from a
+/// block cut out of it, and because a quote carries one extra rule the marker
+/// has to state -- see `inject_quote`.
+pub const QUOTE_OPEN: &str = "<!-- quote:";
+pub const QUOTE_CLOSE: &str = "<!-- /quote -->";
 
 /// Every diagram this generator knows how to draw, by the name in its marker.
 pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
@@ -199,13 +212,47 @@ pub fn page_for(root: &Path, name: &str) -> std::path::PathBuf {
 /// A missing marker is an error. Skipping silently would let a diagram stop
 /// being regenerated while the generator still reported success.
 pub fn inject(page: &str, name: &str, svg: &str) -> Result<String> {
-    let open = format!("{OPEN}{name} -->");
+    inject_between(page, OPEN, CLOSE, name, svg)
+}
+
+/// Replace the quoted block for `id` in `page`, returning the new text.
+///
+/// One rule a diagram does not have: **the marker must sit in column zero.**
+/// `inject_between` re-indents a block to match its marker, which is right for
+/// an SVG sitting inside prose and wrong for a `<pre>`, where the indent would
+/// land inside the block and show up as leading spaces on every quoted line.
+/// Refusing is better than silently indenting, because the damage is visible
+/// only to a reader of the rendered page.
+pub fn inject_quote(page: &str, id: &str, block: &str) -> Result<String> {
+    let open = format!("{QUOTE_OPEN}{id} -->");
+    if let Some(start) = page.find(&open) {
+        let indent = page[..start]
+            .chars()
+            .rev()
+            .take_while(|c| *c == ' ')
+            .count();
+        if indent > 0 {
+            bail!("`{open}` is indented {indent} spaces; a quote marker sits in column zero");
+        }
+    }
+    inject_between(page, QUOTE_OPEN, QUOTE_CLOSE, id, block)
+}
+
+/// The shared body of both injectors.
+fn inject_between(
+    page: &str,
+    open_prefix: &str,
+    close: &str,
+    name: &str,
+    svg: &str,
+) -> Result<String> {
+    let open = format!("{open_prefix}{name} -->");
     let Some(start) = page.find(&open) else {
         bail!("no `{open}` marker on the page");
     };
     let after = start + open.len();
-    let Some(rel) = page[after..].find(CLOSE) else {
-        bail!("`{open}` is never closed by `{CLOSE}`");
+    let Some(rel) = page[after..].find(close) else {
+        bail!("`{open}` is never closed by `{close}`");
     };
     let end = after + rel;
     // The indentation of the opening marker is reused, so a generated block
@@ -242,35 +289,90 @@ pub fn inject(page: &str, name: &str, svg: &str) -> Result<String> {
     ))
 }
 
-/// Write every diagram into its page. Returns the pages that changed.
+/// One generated block, resolved: the file it lives in, the marker that
+/// bounds it, and the text the source says it should hold now.
+///
+/// Diagrams and quotes share this so that `write_all`, `stale` and the
+/// freshness test each exist once. The alternative was a second registry, a
+/// second writer and a second test, which is how one of the two ends up
+/// running in CI and the other does not.
+struct Block {
+    page: std::path::PathBuf,
+    /// The marker name, prefixed by its kind for the messages a failing test
+    /// prints: `terminal-layout` or `quote:config-themes#role-names`.
+    label: String,
+    body: String,
+    quote: bool,
+    name: String,
+}
+
+impl Block {
+    /// The page's text with this block's contents replaced.
+    fn applied(&self, before: &str) -> Result<String> {
+        if self.quote {
+            inject_quote(before, &self.name, &self.body)
+        } else {
+            inject(before, &self.name, &self.body)
+        }
+    }
+}
+
+/// Every generated block: the diagrams, the README's Markdown, and the quoted
+/// source blocks.
+fn blocks(root: &Path) -> Result<Vec<Block>> {
+    let mut out: Vec<Block> = render_all(root)?
+        .into_iter()
+        .map(|(name, svg)| Block {
+            page: page_for(root, &name),
+            label: name.clone(),
+            body: svg,
+            quote: false,
+            name,
+        })
+        .collect();
+    for q in quote::all() {
+        out.push(Block {
+            page: root.join("docs").join(format!("{}.html", q.page)),
+            label: format!("quote:{}#{}", q.page, q.id),
+            body: quote::render(root, &q)?,
+            quote: true,
+            name: q.id.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Write every generated block into its page. Returns the ones that changed.
 pub fn write_all(root: &Path) -> Result<Vec<String>> {
     let mut changed = Vec::new();
-    for (name, svg) in render_all(root)? {
-        let page = page_for(root, &name);
-        let before = std::fs::read_to_string(&page)
-            .with_context(|| format!("{} carries the {name} diagram", page.display()))?;
-        let after = inject(&before, &name, &svg)
-            .with_context(|| format!("injecting {name} into {}", page.display()))?;
+    for block in blocks(root)? {
+        let before = std::fs::read_to_string(&block.page).with_context(|| {
+            format!("{} carries the {} block", block.page.display(), block.label)
+        })?;
+        let after = block
+            .applied(&before)
+            .with_context(|| format!("injecting {} into {}", block.label, block.page.display()))?;
         if before != after {
-            std::fs::write(&page, &after)?;
-            changed.push(name);
+            std::fs::write(&block.page, &after)?;
+            changed.push(block.label);
         }
     }
     Ok(changed)
 }
 
-/// Every page that is out of date with respect to the source, with a diff-ish
-/// note. Empty means the committed diagrams match the code.
+/// Every generated block that is out of date with respect to the source.
+/// Empty means the committed pages match the code.
 pub fn stale(root: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    for (name, svg) in render_all(root)? {
-        let page = page_for(root, &name);
-        let before = std::fs::read_to_string(&page)
-            .with_context(|| format!("{} carries the {name} block", page.display()))?;
-        let after = inject(&before, &name, &svg)
-            .with_context(|| format!("injecting {name} into {}", page.display()))?;
+    for block in blocks(root)? {
+        let before = std::fs::read_to_string(&block.page).with_context(|| {
+            format!("{} carries the {} block", block.page.display(), block.label)
+        })?;
+        let after = block
+            .applied(&before)
+            .with_context(|| format!("injecting {} into {}", block.label, block.page.display()))?;
         if before != after {
-            out.push(name);
+            out.push(block.label);
         }
     }
     Ok(out)
@@ -357,6 +459,44 @@ mod tests {
         assert_eq!(
             page_for(root, "architecture"),
             root.join("docs").join("architecture.html")
+        );
+    }
+
+    /// **If this breaks:** a quoted block is written under an indented marker,
+    /// and every line of the `<pre>` on the rendered page gains leading spaces
+    /// that are not in the file it quotes. The damage shows up only in a
+    /// browser, which is the worst place for it to show up first.
+    #[test]
+    fn an_indented_quote_marker_is_refused_rather_than_indenting_the_block() {
+        let page = "<div>
+  <!-- quote:x -->
+  <pre>old</pre>
+  <!-- /quote -->
+</div>";
+        let e = inject_quote(page, "x", "<pre>new</pre>").expect_err("the marker is indented");
+        assert!(e.to_string().contains("column zero"), "{e}");
+    }
+
+    /// **If this breaks:** a quote marker is closed by `<!-- /diagram -->` or
+    /// the other way round, and one injector eats the other's block.
+    #[test]
+    fn a_quote_and_a_diagram_do_not_answer_to_each_other_s_markers() {
+        let quoted = "<!-- quote:x -->
+old
+<!-- /quote -->
+";
+        assert!(
+            inject(quoted, "x", "<svg/>").is_err(),
+            "diagram found a quote"
+        );
+        assert!(
+            inject_quote(PAGE, "x", "<pre/>").is_err(),
+            "quote found a diagram"
+        );
+        let out = inject_quote(quoted, "x", "<pre>new</pre>").expect("its own markers");
+        assert!(
+            out.contains("<pre>new</pre>") && !out.contains("old"),
+            "{out}"
         );
     }
 

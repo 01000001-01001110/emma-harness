@@ -117,13 +117,23 @@
     <code>grep</code> for any of them returns nothing &mdash; and the extraction
     section below already flagged the same fabrication once, for the constant
     and the test, without this block being caught alongside it. What follows is
-    the function actually in the tree on 2026-09-06.
-    <span class="chip cert">certified</span>: pasted from
-    <code>crates/emma/src/term/layout.rs</code>, not retyped.
+    the function in the tree, and it is no longer typed at all: since
+    2026-09-07 the block below is cut out of <code>layout.rs</code> by
+    <code>crates/docsgen</code> and rewritten by
+    <code>cargo run -p emma-docsgen</code>, between markers a person does not
+    edit.
+    <span class="chip test">tested</span>
+    <code>the_committed_diagrams_match_the_source</code> regenerates it and
+    fails when the committed block and the function disagree, the way
+    <code>cargo fmt --check</code> does.
   </p>
 
   <p class="faint">crates/emma/src/term/layout.rs &middot; <code>regions</code></p>
-  <pre><code>pub fn regions(area: Rect, sidebar_w: u16, dock_h: u16) -&gt; Regions {
+<!-- quote:regions -->
+<pre><code><span class="c">/// Carve the window. `sidebar_w` comes from [`sidebar::width`] and `dock_h`</span>
+<span class="c">/// from [`dock_height`], so the two decisions that depend on *state* are made</span>
+<span class="c">/// before the arithmetic that does not.</span>
+<span class="k">pub</span> <span class="k">fn</span> regions(area: Rect, sidebar_w: <span class="k">u16</span>, dock_h: <span class="k">u16</span>) -&gt; Regions {
     <span class="k">let</span> status_h = <span class="k">if</span> area.height &lt; SLIM_STATUS_ROWS { 1 } <span class="k">else</span> { 3 };
     <span class="k">let</span> [content, status] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(status_h)]).areas(area);
@@ -148,8 +158,19 @@
         Constraint::Length(1),
     ])
     .areas(inner);
-    Regions { sidebar, main, main_bordered, header, rule, chat, dock, hint, status }
+    Regions {
+        sidebar,
+        main,
+        main_bordered,
+        header,
+        rule,
+        chat,
+        dock,
+        hint,
+        status,
+    }
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/layout.rs — <code>regions</code>, <code>struct Regions</code></span>
 
   <p>
@@ -262,7 +283,8 @@
   <h2 id="dock">How tall the dock is</h2>
 
   <p class="faint">crates/emma/src/term/layout.rs &middot; <code>dock_height</code></p>
-  <pre><code><span class="c">/// How many rows the dock needs: three for the input box, more while the menu</span>
+<!-- quote:dock-height -->
+<pre><code><span class="c">/// How many rows the dock needs: three for the input box, more while the menu</span>
 <span class="c">/// is up, and the approval panel's evidence when a question is pending. Capped</span>
 <span class="c">/// at half the pane — the prompt may grow upward into transcript rows (§4.6),</span>
 <span class="c">/// not through them.</span>
@@ -273,18 +295,18 @@
 <span class="c">/// The wrapping is `super::view::dock_rows`' — the same function the box paints</span>
 <span class="c">/// with, so the height and the paint cannot disagree. `None` is "the caller</span>
 <span class="c">/// does not know the width yet" and answers with the old three-row floor.</span>
-pub fn dock_height(view: &amp;View, room: u16, width: Option&lt;u16&gt;) -&gt; u16 {
+<span class="k">pub</span> <span class="k">fn</span> dock_height(view: &amp;View, room: <span class="k">u16</span>, width: Option&lt;<span class="k">u16</span>&gt;) -&gt; <span class="k">u16</span> {
     <span class="k">let</span> room = room.max(1);
     <span class="c">// The ceiling would like to be half the window and must never exceed the</span>
     <span class="c">// window: on a degenerate frame half-of-room is below the floors, and a</span>
     <span class="c">// clamp whose min exceeds its max is a panic, not a layout.</span>
     <span class="k">let</span> ceiling = (room / 2).max(5).min(room);
-    <span class="k">let</span> bounded = |want: u16, floor: u16| want.clamp(floor.min(ceiling), ceiling);
+    <span class="k">let</span> bounded = |want: <span class="k">u16</span>, floor: <span class="k">u16</span>| want.clamp(floor.min(ceiling), ceiling);
     <span class="k">match</span> &amp;view.prompt {
-        Some(p) =&gt; bounded((p.preview.len() <span class="k">as</span> u16).saturating_add(3), 5),
+        Some(p) =&gt; bounded((p.preview.len() <span class="k">as</span> <span class="k">u16</span>).saturating_add(3), 5),
         None =&gt; <span class="k">match</span> &amp;view.menu {
             Some(m) =&gt; {
-                <span class="k">let</span> extra = (m.rows.len() <span class="k">as</span> u16 + u16::from(m.note.is_some())).min(8);
+                <span class="k">let</span> extra = (m.rows.len() <span class="k">as</span> <span class="k">u16</span> + <span class="k">u16</span>::from(m.note.is_some())).min(8);
                 bounded(3 + extra, 3)
             }
             <span class="c">// The typed message decides, through the same function the box</span>
@@ -292,12 +314,13 @@ pub fn dock_height(view: &amp;View, room: u16, width: Option&lt;u16&gt;) -&gt; u
             <span class="c">// three rows are the floor and the answer when the caller does not</span>
             <span class="c">// know yet.</span>
             None =&gt; <span class="k">match</span> width {
-                Some(w) =&gt; bounded(super::view::dock_rows(view, w), 3),
+                Some(w) =&gt; bounded(<span class="k">super</span>::view::dock_rows(view, w), 3),
                 None =&gt; 3.min(ceiling),
             },
         },
     }
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/layout.rs — <code>dock_height</code></span>
 
   <p>
@@ -343,11 +366,12 @@ pub fn dock_height(view: &amp;View, room: u16, width: Option&lt;u16&gt;) -&gt; u
   <h2 id="latch">The sidebar latch</h2>
 
   <p class="faint">crates/emma/src/term/app.rs &middot; <code>Latch</code>, <code>hidden</code></p>
-  <pre><code><span class="c">/// Whether the sidebar is collapsed, and whether that was a person's decision.</span>
+<!-- quote:latch -->
+<pre><code><span class="c">/// Whether the sidebar is collapsed, and whether that was a person's decision.</span>
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Latch {
-    pub collapsed: bool,
-    pub by_user: bool,
+<span class="k">pub</span> <span class="k">struct</span> Latch {
+    <span class="k">pub</span> collapsed: <span class="k">bool</span>,
+    <span class="k">pub</span> by_user: <span class="k">bool</span>,
 }
 
 <span class="c">/// Is the sidebar hidden at this width?</span>
@@ -356,13 +380,14 @@ pub struct Latch {
 <span class="c">/// collapse un-collapses when the window widens past the threshold again — it</span>
 <span class="c">/// was never a choice — which falls out of `by_user` being false rather than</span>
 <span class="c">/// being a rule of its own.</span>
-pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
+<span class="k">pub</span> <span class="k">fn</span> hidden(total_cols: <span class="k">u16</span>, latch: Latch) -&gt; <span class="k">bool</span> {
     <span class="k">if</span> latch.by_user {
         latch.collapsed
     } <span class="k">else</span> {
         total_cols &lt; sidebar::AUTO_COLLAPSE_COLS
     }
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/app.rs — <code>Latch</code>, <code>hidden</code>; crates/emma/src/term/sidebar.rs — <code>AUTO_COLLAPSE_COLS</code></span>
 
   <p>
@@ -383,96 +408,189 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
       With <code>by_user</code> false, <code>hidden</code> ignores
       <code>collapsed</code> entirely and answers from the width, so that line
       re-tests the automatic branch already asserted three lines above rather
-      than the user-opinion branch its name claims. The guarantee is covered
-      later in the same test through <code>App::toggle_sidebar</code>, and again
-      in <code>a_user_expand_below_the_threshold_survives_the_automatic_rule</code>,
-      so nothing is uncovered; the misleading binding is.
-      <span class="chip cert">certified</span>: read the three lines and the
-      body of <code>hidden</code> above.
+      than the user-opinion branch its name claims. The line now carries the
+      comment <em>&ldquo;precondition: auto would hide it&rdquo;</em>, which is
+      an honest label for what it does, and the guarantee is covered twice over:
+      later in the same test through <code>App::toggle_sidebar</code>, and by
+      the same-named test in <code>guarantees.rs</code>, whose
+      <code>user_open</code> binding sets <code>by_user: true</code> and asserts
+      <code>!hidden(80, user_open)</code>. That is the assertion that goes red
+      if the user branch is dropped from <code>hidden</code>; the one in
+      <code>app.rs</code> is not.
+      <span class="chip cert">certified</span>: read the three lines in each
+      file and the body of <code>hidden</code> above.
     </p>
-    <span class="src">crates/emma/src/term/app.rs — <code>the_sidebar_latch_honours_the_user_over_the_width</code></span>
+    <span class="src">crates/emma/src/term/app.rs and crates/emma/src/term/guarantees.rs — <code>the_sidebar_latch_honours_the_user_over_the_width</code>, one of each name</span>
   </div>
 
   <h2 id="click">The click, and the row it aims at</h2>
 
   <p>
-    The collapse defect this fixes was reported as &ldquo;+ and - does not seem
-    to work&rdquo;: the owner aimed at the affordance with the mouse and nothing
-    routed a click anywhere.
+    <strong>The control on that row changed owner, and this section used to
+    describe the one that left.</strong> The defect that started it was reported
+    as &ldquo;+ and - does not seem to work&rdquo;: the owner aimed at the
+    affordance with the mouse and nothing routed a click anywhere. The fix at
+    the time was <code>App::click</code>, which hit-tested the whole SESSIONS
+    header row against a <code>side_rect</code> recorded during
+    <code>render</code> and called <code>toggle_sidebar</code>. Neither the
+    function nor the field is in the tree: the 2026-08-27 TUI import put the
+    mock's <code>[+]</code> New Session control on that row instead, and
+    collapsing is a keyboard toggle. <code>Ctrl-B</code> is the only way in and
+    out, which the hint row names.
   </p>
-
-  <p class="faint">crates/emma/src/term/app.rs &middot; <code>App::click</code></p>
-  <pre><code>    pub fn click(&amp;<span class="k">mut</span> self, x: u16, y: u16, total_cols: u16) -&gt; bool {
-        <span class="k">let</span> r = self.side_rect;
-        <span class="c">// Under three cells either way the sidebar drew nothing (its own</span>
-        <span class="c">// rule), so there is no affordance on screen to have been aimed at.</span>
-        <span class="k">if</span> r.width &lt; 3 || r.height &lt; 3 {
-            <span class="k">return</span> false;
-        }
-        <span class="k">let</span> header_row = r.y + 1;
-        <span class="k">if</span> y == header_row &amp;&amp; x &gt; r.x &amp;&amp; x &lt; r.right().saturating_sub(1) {
-            self.toggle_sidebar(total_cols);
-            <span class="k">return</span> true;
-        }
-        false
-    }</code></pre>
-  <span class="src">crates/emma/src/term/app.rs — <code>App::click</code>, <code>side_rect</code></span>
 
   <p>
-    <code>side_rect</code> is written down during <code>render</code>, because a
-    mouse aims at what was on screen at the last paint and only the layout knows
-    which cells were the sidebar's. The whole header row is the target rather
-    than the <code>[+]</code>'s three cells, and the doc gives the reason:
-    <em>&ldquo;the affordance's exact columns are the sidebar's internal layout,
-    which this file does not own, and a three-cell target at a guessed offset is
-    a miss magnet.&rdquo;</em> A collapsed sidebar has no cells and therefore no
-    click target; the way back is <code>Ctrl-B</code>, which the hint row names.
-    <span class="chip test">tested</span>:
-    <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
-    also widens the window afterwards to prove the automatic rule does not
-    reopen what the user closed, and
-    <code>a_click_anywhere_but_the_header_row_toggles_nothing</code> tries four
-    near misses.
+    The guarantee survived the swap even though the method did not: the pointer
+    hits what the reader saw, and nothing else. Two functions carry it, and the
+    split is what keeps the hit test from agreeing with itself and disagreeing
+    with the screen. <code>new_session_hit</code> is the geometry, re-derived
+    from the three rules <code>sidebar::header</code> paints by; <code>App</code>
+    stores the rectangle its last paint produced and tests presses against that
+    stored copy rather than recomputing one.
   </p>
 
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>new_session_hit</code></p>
+<!-- quote:new-session-hit -->
+<pre><code><span class="c">/// Where the SESSIONS header's `[+]` sits, given the sidebar's own rectangle.</span>
+<span class="c">///</span>
+<span class="c">/// **Geometry, not a question asked of `sidebar.rs`.** That module renders and</span>
+<span class="c">/// reports nothing back, so this re-derives the three facts its header row is</span>
+<span class="c">/// built from: the pane is bordered, so its content starts one cell in on both</span>
+<span class="c">/// axes; the header is the content's first row; and the affordance is</span>
+<span class="c">/// right-aligned in it, dropped whole when it does not fit rather than clipped</span>
+<span class="c">/// to a `[+` that is not a control. Those are the rules in `sidebar::header`,</span>
+<span class="c">/// and the test that both agree is the one that reads the rect off a real</span>
+<span class="c">/// paint.</span>
+<span class="k">pub</span> <span class="k">fn</span> new_session_hit(sidebar: Rect) -&gt; Option&lt;Rect&gt; {
+    <span class="c">// The same floor `sidebar::render` refuses to draw below.</span>
+    <span class="k">if</span> sidebar.width &lt; 3 || sidebar.height &lt; 3 {
+        <span class="k">return</span> None;
+    }
+    <span class="k">let</span> width = sidebar::COLLAPSE_HINT.chars().count() <span class="k">as</span> <span class="k">u16</span>;
+    <span class="k">let</span> inner_w = sidebar.width - 2;
+    <span class="k">if</span> inner_w &lt; width {
+        <span class="k">return</span> None;
+    }
+    <span class="c">// `sidebar::header` leaves its right pad after the affordance, and drops</span>
+    <span class="c">// the pad whole — never the glyph — when the two together will not fit.</span>
+    <span class="c">// The same two rules, in the same order, or the rectangle is not where the</span>
+    <span class="c">// glyph is.</span>
+    <span class="k">let</span> pad = <span class="k">if</span> width + sidebar::HEADER_RIGHT_PAD &gt; inner_w {
+        0
+    } <span class="k">else</span> {
+        sidebar::HEADER_RIGHT_PAD
+    };
+    Some(Rect::new(
+        sidebar.x + 1 + inner_w - width - pad,
+        sidebar.y + 1,
+        width,
+        1,
+    ))
+}</code></pre>
+<!-- /quote -->
+  <span class="src">crates/emma/src/term/app.rs — <code>new_session_hit</code>, <code>sidebar_click</code>, <code>App::new_session_clicked</code>, <code>sessions_add</code></span>
+
+  <p>
+    <code>sidebar_click</code> answers <code>None</code> for every other cell of
+    the pane, and its doc gives the reason: <em>&ldquo;a sidebar where one
+    control works and the rest of the surface swallows clicks is worse than one
+    where the pointer passes through.&rdquo;</em> It also answers
+    <code>None</code> while a question is on screen, which is the rule
+    <code>pane_key</code> applies to the keyboard. A sidebar too narrow to hold
+    the glyph has no rectangle at all, because the affordance is dropped whole
+    rather than clipped to a <code>[+</code> that is not a control; a collapsed
+    sidebar has no pane and therefore nothing to aim at.
+    <span class="chip test">tested</span>:
+    <code>a_click_on_the_affordance_asks_for_a_new_conversation</code> presses
+    all three columns,
+    <code>a_click_anywhere_else_in_the_sidebar_does_nothing</code> tries five
+    near misses including the pad beside the glyph,
+    <code>a_pending_prompt_suppresses_the_affordance</code> covers the prompt
+    rule and
+    <code>a_sidebar_too_narrow_to_hold_the_affordance_has_none_to_click</code>
+    the two absent cases.
+  </p>
+
+  <p>
+    That the stored rectangle is where the glyph actually is, rather than where
+    the geometry believes it is, is the assertion the arrangement exists for.
+    <span class="chip test">tested</span>:
+    <code>the_paint_records_where_the_affordance_landed</code> reads the rect off
+    a real paint, and
+    <code>only_the_new_session_control_takes_a_click_and_it_is_where_it_was_drawn</code>
+    in <code>guarantees.rs</code> skips to the recorded rectangle's columns in
+    the painted header row and requires a <code>+</code> there. That check caught
+    a live miss: the incoming hit test ignored
+    <code>sidebar::HEADER_RIGHT_PAD</code>, so every click landed two columns
+    right of the glyph, and coordinates alone would have agreed with the bug.
+  </p>
+
+  <p>
+    What the press then does is not decided at the pointer.
+    <code>clicked_new_session</code> asks
+    <code>session_command::mid_goal</code> what <code>/clear</code> does while a
+    goal runs, and <code>/clear</code> is a wait there, so the click waits and
+    says so. The defect that function was written for was live in this tree: the
+    press printed &ldquo;new conversation — grants kept&rdquo; and handed
+    <code>/clear</code> to a channel nothing reads mid-goal, so the control did
+    nothing while a notice said it had worked.
+    <span class="chip test">tested</span>:
+    <code>a_goal_in_flight_makes_the_plus_say_so_rather_than_swallowing_the_click</code>.
+  </p>
+  <span class="src">crates/emma/src/term/app.rs — <code>clicked_new_session</code>, <code>NEW_SESSION_COMMAND</code>, <code>NEW_SESSION_BUSY_NOTICE</code>; crates/emma/src/session_command.rs — <code>mid_goal</code></span>
+
   <div class="note warn">
-    <span class="h">Defect: <code>header_row = r.y + 1</code> assumes an ordering the sidebar does not promise</span>
+    <span class="h">The old defect here is closed, and the reason is worth keeping</span>
     <p>
-      The hit-test hard-codes the SESSIONS header as the sidebar's first inner
-      row. Nothing in <code>sidebar.rs</code> pins that: <code>content()</code>
-      happens to push the SESSIONS header first, and the click test happens to
-      pass, but the two files agree by coincidence rather than by contract.
-      Adding a row above the first header, or reordering the sections, moves the
-      affordance and leaves the click on whatever is now on row one.
-      <span class="chip unv">unverified</span> as a live symptom, since the
-      ordering has not changed. A constant exported from <code>sidebar.rs</code>
-      naming the header's row offset, consulted here, would settle it.
+      This section used to record that <code>header_row = r.y + 1</code>
+      hard-coded the SESSIONS header as the sidebar's first inner row, with
+      nothing in <code>sidebar.rs</code> pinning that: the two files agreed by
+      coincidence and the click test happened to pass. The offset survives in
+      <code>new_session_hit</code>, still un-pinned by a constant, so a row
+      added above the first header would still move the glyph away from the
+      rectangle. What closed the defect is that a test now notices: the paint is
+      read back and the glyph must be inside the recorded rect, so the two files
+      drifting apart is a red test rather than a silent miss.
+      <span class="chip unv">unverified</span> that the reordering case in
+      particular goes red, since nobody has reordered the sections to watch it.
+      Moving <code>content()</code>'s SESSIONS push below another section and
+      running <code>the_paint_records_where_the_affordance_landed</code> would
+      settle it.
     </p>
-    <span class="src">crates/emma/src/term/app.rs — <code>App::click</code>; crates/emma/src/term/sidebar.rs — <code>content</code></span>
+    <span class="src">crates/emma/src/term/app.rs — <code>new_session_hit</code>; crates/emma/src/term/sidebar.rs — <code>content</code>, <code>header</code></span>
   </div>
 
   <h2 id="render">What <code>App::render</code> does, in order</h2>
 
   <p>
-    Nine steps; two are seams. It refuses a zero-sized area; asks
-    <code>hidden</code> and <code>sidebar::width</code>; carves; writes down
-    <code>side_rect</code>; draws the sidebar; draws the main pane's border,
-    header and rule; sets <code>wrap_width</code> and <code>chat_height</code>
-    and re-wraps the transcript; draws the chat pane; draws the dock through
-    <code>View</code>'s own renderers; draws the hint; and finally draws the
-    status bar, or the configured status program's row in its place.
+    It refuses a zero-sized area; asks <code>hidden</code> and
+    <code>sidebar::width</code>; builds the sidebar's state; clears the control
+    rectangles a closing page would otherwise leave catching clicks; hands the
+    carve to <code>layout::compose</code>, which paints the sidebar, the main
+    border and the bottom bar; and lets the open screen fill the main region.
+    On the chat screen that is <code>chat_screen</code>: header, rule,
+    <code>wrap_width</code> and <code>chat_height</code>, a re-wrap, the chat
+    pane, the dock through <code>View</code>'s own renderers, and the hint.
   </p>
 
   <p>
-    The first seam is the wrap width. Retained transcript entries are wrapped by
-    this file and painted by <code>chat.rs</code> at a gutter offset, so both
-    numbers are derived from one function of the pane's own rectangle:
+    <strong>This paragraph named a <code>side_rect</code> written down during
+    <code>render</code> until 2026-09-07, and there is no such field.</strong>
+    It went with <code>App::click</code> in the TUI import; what the paint
+    records now is <code>sessions_add</code> for the <code>[+]</code>,
+    <code>sidebar_hits</code> for the rows, and <code>chat_rect</code> for the
+    selectable pane. See <a href="#click">the click section</a>.
   </p>
 
-  <pre><code>        self.wrap_width = chat::message_width(r.chat.width.max(1));
-        self.chat_height = r.chat.height.max(1);
-        self.transcript.set_width(skin, self.wrap_width);
-        chat::render(r.chat, buf, &amp;self.transcript, skin);</code></pre>
+  <p>
+    The wrap width is a seam. Retained transcript entries are wrapped by this
+    file and painted by <code>chat.rs</code> at a gutter offset, so both numbers
+    are derived from one function of the pane's own rectangle:
+  </p>
+
+  <pre><code>        self.chat_height = r.chat.height.max(1);
+        self.wrap_width = chat::message_width(r.chat.width.max(1));
+        self.transcript.set_width(skin, self.wrap_width);</code></pre>
 
   <p>
     The test that guards it says what would happen otherwise:

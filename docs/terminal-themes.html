@@ -103,23 +103,24 @@
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; <code>Entry</code>, <code>Theme</code></p>
-  <pre><code><span class="c">/// One role at all three fidelities. Which one is used is [`super::palette`]'s</span>
+<!-- quote:entry -->
+<pre><code><span class="c">/// One role at all three fidelities. Which one is used is [`super::palette`]'s</span>
 <span class="c">/// decision, made after this — a theme supplies the values and never chooses</span>
 <span class="c">/// between them, which is what keeps `NO_COLOR` and a 16-colour terminal out of</span>
 <span class="c">/// a theme author's reach.</span>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Entry {
-    rgb: (u8, u8, u8),
-    idx: u8,
+<span class="k">struct</span> Entry {
+    rgb: (<span class="k">u8</span>, <span class="k">u8</span>, <span class="k">u8</span>),
+    idx: <span class="k">u8</span>,
     ansi: Color,
 }
 
-<span class="w">…</span>
+<span class="c">// …</span>
 
 <span class="c">/// A theme, resolved. Fixed-size and `Copy` — see the module doc for why that</span>
 <span class="c">/// is a constraint rather than a preference.</span>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Theme {
+<span class="k">pub</span> <span class="k">struct</span> Theme {
     <span class="c">/// Indexed by [`slot`], so the array order is the `Role` declaration order</span>
     <span class="c">/// and nothing else may assume it.</span>
     roles: [Entry; 14],
@@ -127,7 +128,28 @@ pub struct Theme {
     <span class="c">/// whole reason a background is expressible at all.</span>
     chip: [Entry; 2],
     selection: [Entry; 2],
+}
+
+<span class="c">/// Where a role sits in [`Theme::roles`].</span>
+<span class="k">const</span> <span class="k">fn</span> slot(role: Role) -&gt; <span class="k">usize</span> {
+    <span class="k">match</span> role {
+        Role::Text =&gt; 0,
+        Role::Dim =&gt; 1,
+        Role::Ok =&gt; 2,
+        Role::Err =&gt; 3,
+        Role::Warn =&gt; 4,
+        Role::Info =&gt; 5,
+        Role::Accent =&gt; 6,
+        Role::Ground =&gt; 7,
+        Role::Comment =&gt; 8,
+        Role::Keyword =&gt; 9,
+        Role::Str =&gt; 10,
+        Role::Number =&gt; 11,
+        Role::Type =&gt; 12,
+        Role::Func =&gt; 13,
+    }
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>Entry</code>, <code>Theme</code>, <code>slot</code></span>
 
   <p>
@@ -172,13 +194,15 @@ pub struct Theme {
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; the tail of <code>role_entry</code></p>
-  <pre><code>    Some(Entry {
-        rgb,
-        idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
-        <span class="c">// Inherited, never derived. Distance at sixteen colours is exactly how</span>
-        <span class="c">// an accent becomes the colour that means failure.</span>
-        ansi: declared_ansi.unwrap_or(inherited.ansi),
-    })</code></pre>
+<!-- quote:role-entry-tail -->
+<pre><code>Some(Entry {
+    rgb,
+    idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
+    <span class="c">// Inherited, never derived. Distance at sixteen colours is exactly how</span>
+    <span class="c">// an accent becomes the colour that means failure.</span>
+    ansi: declared_ansi.unwrap_or(inherited.ansi),
+})</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>role_entry</code>, <code>derive_index</code></span>
 
   <p>
@@ -203,15 +227,17 @@ pub struct Theme {
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; inside <code>apply_roles</code></p>
-  <pre><code>        <span class="k">if</span> name == "text" {
-            notices.push(
-                "roles.text is not settable: body text is the terminal's own foreground, and a \
-                 foreground chosen against one background is invisible on the opposite one — \
-                 which the person it breaks for reads as Emma being broken, not the theme"
-                    .to_string(),
-            );
-            <span class="k">continue</span>;
-        }</code></pre>
+<!-- quote:text-is-not-settable -->
+<pre><code><span class="k">if</span> name == <span class="s">"text"</span> {
+    notices.push(
+        <span class="s">"roles.text is not settable: body text is the terminal's own foreground, and a \
+         foreground chosen against one background is invisible on the opposite one — \
+         which the person it breaks for reads as Emma being broken, not the theme"</span>
+            .to_string(),
+    );
+    <span class="k">continue</span>;
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>apply_roles</code>, <code>ROLE_NAMES</code>, <code>SETTABLE</code></span>
 
   <p>
@@ -242,16 +268,18 @@ pub struct Theme {
     fidelity</strong>, checked on the resolved values rather than on the hexes:
   </p>
 
-  <pre><code>    <span class="k">if</span> halves[0].rgb == halves[1].rgb
-        || halves[0].idx == halves[1].idx
-        || halves[0].ansi == halves[1].ansi
-    {
-        notices.push(format!(
-            "pairs.{name} resolves to the same colour on both halves at one of the three \
-             fidelities, which would draw it invisible; the built-in pair is kept"
-        ));
-        <span class="k">return</span> None;
-    }</code></pre>
+<!-- quote:pair-collision -->
+<pre><code><span class="k">if</span> halves[0].rgb == halves[1].rgb
+    || halves[0].idx == halves[1].idx
+    || halves[0].ansi == halves[1].ansi
+{
+    notices.push(format!(
+        <span class="s">"pairs.{name} resolves to the same colour on both halves at one of the three \
+         fidelities, which would draw it invisible; the built-in pair is kept"</span>
+    ));
+    <span class="k">return</span> None;
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>pair_halves</code></span>
 
   <p>

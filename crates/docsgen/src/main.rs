@@ -15,8 +15,10 @@ fn main() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let root = root.canonicalize()?;
 
-    if std::env::args().nth(1).as_deref() == Some("coverage") {
-        return report_coverage(&root);
+    match std::env::args().nth(1).as_deref() {
+        Some("coverage") => return report_coverage(&root),
+        Some("quotes") => return print_quotes(&root),
+        _ => {}
     }
 
     let changed = emma_docsgen::write_all(&root)?;
@@ -26,6 +28,20 @@ fn main() -> Result<()> {
         for name in &changed {
             println!("redrew {name}");
         }
+    }
+    Ok(())
+}
+
+/// Print every quoted block as plain source, one after another.
+///
+/// The reviewing instrument for a conversion: a hand-written block and the
+/// text the source actually says are compared here, before the block is
+/// replaced. A difference is a defect the page has been carrying, and it
+/// should be read rather than silently overwritten.
+fn print_quotes(root: &std::path::Path) -> Result<()> {
+    for q in emma_docsgen::quote::all() {
+        println!("===== {}#{} <- {} =====", q.page, q.id, q.file);
+        println!("{}", emma_docsgen::quote::text(&root.join(q.file), &q.sel)?);
     }
     Ok(())
 }

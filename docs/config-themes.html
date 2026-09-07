@@ -106,24 +106,26 @@
   </p>
 
   <p class="faint">crates/emma/src/session_command.rs · <code>theme_dirs</code></p>
-<pre><code>/// The two directories, in the order a name is looked for in them.
-///
-/// **Yours beats the project's**, following the harness's own argument for
-/// skipping `~/.claude/`: a project cannot select a theme, so the only way a
-/// repository could change your colours is by shadowing a name you had already
-/// chosen, and this order is what closes that. The reverse — your file
-/// shadowing the project's — is not a risk, it is the preference working.
-fn theme_dirs(home: Option&lt;&amp;Path&gt;, root: &amp;Path) -&gt; Vec&lt;(&amp;'static str, PathBuf)&gt; {
-    let mut dirs = Vec::new();
-    if let Some(home) = home {
-        dirs.push(("yours", home.join(".emma").join("themes")));
+<!-- quote:theme-dirs -->
+<pre><code><span class="c">/// The two directories, in the order a name is looked for in them.</span>
+<span class="c">///</span>
+<span class="c">/// **Yours beats the project's**, following the harness's own argument for</span>
+<span class="c">/// skipping `~/.claude/`: a project cannot select a theme, so the only way a</span>
+<span class="c">/// repository could change your colours is by shadowing a name you had already</span>
+<span class="c">/// chosen, and this order is what closes that. The reverse — your file</span>
+<span class="c">/// shadowing the project's — is not a risk, it is the preference working.</span>
+<span class="k">fn</span> theme_dirs(home: Option&lt;&amp;Path&gt;, root: &amp;Path) -&gt; Vec&lt;(&amp;'<span class="k">static</span> <span class="k">str</span>, PathBuf)&gt; {
+    <span class="k">let</span> <span class="k">mut</span> dirs = Vec::new();
+    <span class="k">if</span> <span class="k">let</span> Some(home) = home {
+        dirs.push((<span class="s">"yours"</span>, home.join(<span class="s">".emma"</span>).join(<span class="s">"themes"</span>)));
     }
-    // The harness root is already `.emma/` or `.claude/`, whichever this
-    // directory has, so themes ride the discovery that has already happened
-    // rather than getting a second rule to be wrong about.
-    dirs.push(("this project", root.join("themes")));
+    <span class="c">// The harness root is already `.emma/` or `.claude/`, whichever this</span>
+    <span class="c">// directory has, so themes ride the discovery that has already happened</span>
+    <span class="c">// rather than getting a second rule to be wrong about.</span>
+    dirs.push((<span class="s">"this project"</span>, root.join(<span class="s">"themes"</span>)));
     dirs
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/session_command.rs — <code>theme_dirs</code>, <code>available</code></span>
 
   <p>
@@ -155,31 +157,33 @@ fn theme_dirs(home: Option&lt;&amp;Path&gt;, root: &amp;Path) -&gt; Vec&lt;(&amp
   <h2 id="load">The loader</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the doc</p>
-<pre><code>/// The theme in force, and everything that went wrong getting there.
-///
-/// **This never fails and never blocks the boot.** A missing file, a file that
-/// is not JSON, a hex that is not a hex — each costs exactly as much colour as
-/// it has to and produces a sentence saying so. The caller's job is to put
-/// those sentences on screen through the same channel every other Emma
-/// observation uses; at `Level::None` they are the only honest thing to say,
-/// because the theme was never going to be consulted anyway.
-///
-/// `name` is the one-run override. With `None` the selection comes from
-/// `~/.emma/settings.json`, and never from the project's `config.json`:
-/// `settings.rs` already ruled that a personal default in a project's
-/// configuration is two files answering one question with no rule for
-/// disagreeing.
-///
-/// **User themes beat project themes on a name collision.** A project cannot
-/// *select* a theme, so shadowing a name somebody already chose is the only way
-/// a repository could repaint their screen, and this order is the door that
-/// closes. The reverse — your own theme winning over the project's — is not a
-/// risk; it is the preference working.
-pub fn load(
+<!-- quote:load-signature -->
+<pre><code><span class="c">/// The theme in force, and everything that went wrong getting there.</span>
+<span class="c">///</span>
+<span class="c">/// **This never fails and never blocks the boot.** A missing file, a file that</span>
+<span class="c">/// is not JSON, a hex that is not a hex — each costs exactly as much colour as</span>
+<span class="c">/// it has to and produces a sentence saying so. The caller's job is to put</span>
+<span class="c">/// those sentences on screen through the same channel every other Emma</span>
+<span class="c">/// observation uses; at `Level::None` they are the only honest thing to say,</span>
+<span class="c">/// because the theme was never going to be consulted anyway.</span>
+<span class="c">///</span>
+<span class="c">/// `name` is the one-run override. With `None` the selection comes from</span>
+<span class="c">/// `~/.emma/settings.json`, and never from the project's `config.json`:</span>
+<span class="c">/// `settings.rs` already ruled that a personal default in a project's</span>
+<span class="c">/// configuration is two files answering one question with no rule for</span>
+<span class="c">/// disagreeing.</span>
+<span class="c">///</span>
+<span class="c">/// **User themes beat project themes on a name collision.** A project cannot</span>
+<span class="c">/// *select* a theme, so shadowing a name somebody already chose is the only way</span>
+<span class="c">/// a repository could repaint their screen, and this order is the door that</span>
+<span class="c">/// closes. The reverse — your own theme winning over the project's — is not a</span>
+<span class="c">/// risk; it is the preference working.</span>
+<span class="k">pub</span> <span class="k">fn</span> load(
     home: Option&lt;&amp;Path&gt;,
     harness_root: Option&lt;&amp;Path&gt;,
-    name: Option&lt;&amp;str&gt;,
+    name: Option&lt;&amp;<span class="k">str</span>&gt;,
 ) -&gt; (Theme, Vec&lt;String&gt;) {</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>load</code></span>
 
   <p>
@@ -192,19 +196,21 @@ pub fn load(
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the reserved name and the read</p>
-<pre><code>    if RESERVED.contains(&amp;selected.as_str()) {
-        // The name resolves to the built-in either way; the notice exists so an
-        // author who wrote a file of that name is told why it did nothing,
-        // rather than concluding their JSON is broken.
-        if let Some(path) = searched.iter().find(|p| p.exists()) {
-            notices.push(format!(
-                "{} is a built-in theme name, so {} is ignored; copy it to another name and select that",
-                selected,
-                path.display()
-            ));
-        }
-        return (BUILTIN, notices);
-    }</code></pre>
+<!-- quote:reserved-name -->
+<pre><code><span class="k">if</span> RESERVED.contains(&amp;selected.as_str()) {
+    <span class="c">// The name resolves to the built-in either way; the notice exists so an</span>
+    <span class="c">// author who wrote a file of that name is told why it did nothing,</span>
+    <span class="c">// rather than concluding their JSON is broken.</span>
+    <span class="k">if</span> <span class="k">let</span> Some(path) = searched.iter().find(|p| p.exists()) {
+        notices.push(format!(
+            <span class="s">"{} is a built-in theme name, so {} is ignored; copy it to another name and select that"</span>,
+            selected,
+            path.display()
+        ));
+    }
+    <span class="k">return</span> (BUILTIN, notices);
+}</code></pre>
+<!-- /quote -->
 <pre><code>        Err(e) =&gt; {
             // serde's line and column, verbatim: "expected `,` at line 7
             // column 3" is the whole of what the user needs, and paraphrasing
@@ -226,37 +232,39 @@ pub fn load(
   <h2 id="keys">What a file may contain</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · the name tables</p>
-<pre><code>/// Every role name a file may use, including the one that is refused — a typo
-/// of `text` should be told about `text`, not about thirteen names that do not
-/// include it.
-const ROLE_NAMES: [&amp;str; 14] = [
-    "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
-    "number", "type", "function",
+<!-- quote:role-names -->
+<pre><code><span class="c">/// Every role name a file may use, including the one that is refused — a typo</span>
+<span class="c">/// of `text` should be told about `text`, not about thirteen names that do not</span>
+<span class="c">/// include it.</span>
+<span class="k">const</span> ROLE_NAMES: [&amp;<span class="k">str</span>; 14] = [
+    <span class="s">"text"</span>, <span class="s">"dim"</span>, <span class="s">"ok"</span>, <span class="s">"err"</span>, <span class="s">"warn"</span>, <span class="s">"info"</span>, <span class="s">"accent"</span>, <span class="s">"ground"</span>, <span class="s">"comment"</span>, <span class="s">"keyword"</span>, <span class="s">"string"</span>,
+    <span class="s">"number"</span>, <span class="s">"type"</span>, <span class="s">"function"</span>,
 ];
 
-/// The settable roles, by the name a file spells them with.
-const SETTABLE: [(&amp;str, Role); 13] = [
-    ("dim", Role::Dim),
-    // A theme that names none of these keeps the built-in six, so every theme
-    // already written stays valid and gains readable code for free.
-    ("comment", Role::Comment),
-    ("keyword", Role::Keyword),
-    ("string", Role::Str),
-    ("number", Role::Number),
-    ("type", Role::Type),
-    ("function", Role::Func),
-    ("ok", Role::Ok),
-    ("err", Role::Err),
-    ("warn", Role::Warn),
-    ("info", Role::Info),
-    ("accent", Role::Accent),
-    ("ground", Role::Ground),
+<span class="c">/// The settable roles, by the name a file spells them with.</span>
+<span class="k">const</span> SETTABLE: [(&amp;<span class="k">str</span>, Role); 13] = [
+    (<span class="s">"dim"</span>, Role::Dim),
+    <span class="c">// A theme that names none of these keeps the built-in six, so every theme</span>
+    <span class="c">// already written stays valid and gains readable code for free.</span>
+    (<span class="s">"comment"</span>, Role::Comment),
+    (<span class="s">"keyword"</span>, Role::Keyword),
+    (<span class="s">"string"</span>, Role::Str),
+    (<span class="s">"number"</span>, Role::Number),
+    (<span class="s">"type"</span>, Role::Type),
+    (<span class="s">"function"</span>, Role::Func),
+    (<span class="s">"ok"</span>, Role::Ok),
+    (<span class="s">"err"</span>, Role::Err),
+    (<span class="s">"warn"</span>, Role::Warn),
+    (<span class="s">"info"</span>, Role::Info),
+    (<span class="s">"accent"</span>, Role::Accent),
+    (<span class="s">"ground"</span>, Role::Ground),
 ];
 
-/// How many problems are worth putting above somebody's first prompt. A wall of
-/// warnings is its own defect; past this the count and the path are what the
-/// user needs, because the file is where they are going to go and look.
-const MAX_NOTICES: usize = 5;</code></pre>
+<span class="c">/// How many problems are worth putting above somebody's first prompt. A wall of</span>
+<span class="c">/// warnings is its own defect; past this the count and the path are what the</span>
+<span class="c">/// user needs, because the file is where they are going to go and look.</span>
+<span class="k">const</span> MAX_NOTICES: <span class="k">usize</span> = 5;</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>ROLE_NAMES</code>, <code>SETTABLE</code>, <code>MAX_NOTICES</code>, <code>RESERVED</code></span>
 
   <p>
@@ -321,13 +329,15 @@ const MAX_NOTICES: usize = 5;</code></pre>
   <h2 id="roles">Two things a theme may not do</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · module doc</p>
-<pre><code>//! **Two things a theme may not do, and both are about a screen nobody here can
-//! see.** It may not set [`Role::Text`], because a theme author has one
-//! terminal and their foreground is what makes Emma unusable for the person
-//! with the opposite background — and that person reads it as Emma being
-//! broken. And it may not set a background on its own: backgrounds are declared
-//! as [`Pair`]s, fg and bg together, because a pair is legible whatever is
-//! behind it and a lone background is a colour against an unknown one.</code></pre>
+<!-- quote:module-doc -->
+<pre><code><span class="c">//! **Two things a theme may not do, and both are about a screen nobody here can</span>
+<span class="c">//! see.** It may not set [`Role::Text`], because a theme author has one</span>
+<span class="c">//! terminal and their foreground is what makes Emma unusable for the person</span>
+<span class="c">//! with the opposite background — and that person reads it as Emma being</span>
+<span class="c">//! broken. And it may not set a background on its own: backgrounds are declared</span>
+<span class="c">//! as [`Pair`]s, fg and bg together, because a pair is legible whatever is</span>
+<span class="c">//! behind it and a lone background is a colour against an unknown one.</span></code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — module doc, <code>apply_roles</code>, <code>pair_halves</code></span>
 
   <p>
@@ -337,51 +347,57 @@ const MAX_NOTICES: usize = 5;</code></pre>
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>apply_roles</code></p>
-<pre><code>    for (name, spec) in roles {
-        if name == "text" {
-            notices.push(
-                "roles.text is not settable: body text is the terminal's own foreground, and a \
-                 foreground chosen against one background is invisible on the opposite one — \
-                 which the person it breaks for reads as Emma being broken, not the theme"
-                    .to_string(),
-            );
-            continue;
-        }
-        let Some(&amp;(_, role)) = SETTABLE.iter().find(|(n, _)| n == name) else {
-            notices.push(format!(
-                "\"{name}\" is not a role; the roles are {}",
-                ROLE_NAMES.join(", ")
-            ));
-            continue;
-        };
-        if let Some(entry) = role_entry(name, role, spec, notices) {
-            theme.roles[slot(role)] = entry;
-        }
-    }</code></pre>
+<!-- quote:apply-roles -->
+<pre><code><span class="k">for</span> (name, spec) <span class="k">in</span> roles {
+    <span class="k">if</span> name == <span class="s">"text"</span> {
+        notices.push(
+            <span class="s">"roles.text is not settable: body text is the terminal's own foreground, and a \
+             foreground chosen against one background is invisible on the opposite one — \
+             which the person it breaks for reads as Emma being broken, not the theme"</span>
+                .to_string(),
+        );
+        <span class="k">continue</span>;
+    }
+    <span class="k">let</span> Some(&amp;(_, role)) = SETTABLE.iter().find(|(n, _)| n == name) <span class="k">else</span> {
+        notices.push(format!(
+            <span class="s">"\"{name}\" is not a role; the roles are {}"</span>,
+            ROLE_NAMES.join(<span class="s">", "</span>)
+        ));
+        <span class="k">continue</span>;
+    };
+    <span class="k">if</span> <span class="k">let</span> Some(entry) = role_entry(name, role, spec, notices) {
+        theme.roles[slot(role)] = entry;
+    }
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>apply_roles</code></span>
 
   <h2 id="granularity">The granularity is one role</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>role_entry</code>, the doc and the two ends</p>
-<pre><code>/// One role's three values, or `None` when the role keeps the built-in's.
-///
-/// The granularity is the point: a typo in one hex costs that role and leaves
-/// the other twelve of the thirteen settable roles applied, because a theme
-/// thrown away over one character is a theme its author cannot debug.</code></pre>
-<pre><code>    let Some(rgb) = parse_hex(&amp;hex) else {
-        notices.push(format!(
-            "roles.{name}: \"{hex}\" is not a colour — write #rrggbb or #rgb; \
-             the built-in colour is kept"
-        ));
-        return None;
-    };
-    Some(Entry {
-        rgb,
-        idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
-        // Inherited, never derived. Distance at sixteen colours is exactly how
-        // an accent becomes the colour that means failure.
-        ansi: declared_ansi.unwrap_or(inherited.ansi),
-    })</code></pre>
+<!-- quote:role-entry-doc -->
+<pre><code><span class="c">/// One role's three values, or `None` when the role keeps the built-in's.</span>
+<span class="c">///</span>
+<span class="c">/// The granularity is the point: a typo in one hex costs that role and leaves</span>
+<span class="c">/// the other twelve of the thirteen settable roles applied, because a theme</span>
+<span class="c">/// thrown away over one character is a theme its author cannot debug.</span></code></pre>
+<!-- /quote -->
+<!-- quote:role-entry-hex -->
+<pre><code><span class="k">let</span> Some(rgb) = parse_hex(&amp;hex) <span class="k">else</span> {
+    notices.push(format!(
+        <span class="s">"roles.{name}: \"{hex}\" is not a colour — write #rrggbb or #rgb; \
+         the built-in colour is kept"</span>
+    ));
+    <span class="k">return</span> None;
+};
+Some(Entry {
+    rgb,
+    idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
+    <span class="c">// Inherited, never derived. Distance at sixteen colours is exactly how</span>
+    <span class="c">// an accent becomes the colour that means failure.</span>
+    ansi: declared_ansi.unwrap_or(inherited.ansi),
+})</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>role_entry</code>, <code>parse_hex</code>, <code>named_ansi</code>, <code>derive_index</code></span>
 
   <p>
@@ -412,28 +428,32 @@ const MAX_NOTICES: usize = 5;</code></pre>
   <h2 id="pairs">Pairs: both halves or neither</h2>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>pair_halves</code>, the doc and the collision check</p>
-<pre><code>/// Both halves of a pair, or `None` when the pair keeps the built-in's.
-///
-/// Two invariants, and neither is negotiable. **Both halves or neither**: a
-/// half-declared pair applied half-way is a foreground against a background
-/// nobody chose. And **`fg != bg` after resolution at every fidelity**, checked
-/// on the resolved values rather than on the hexes, because the realistic
-/// failure is two different hexes collapsing onto the same named colour at
-/// sixteen — which a check on the hexes cannot see.
-///
-/// Not attempted: a contrast ratio. WCAG arithmetic against a terminal whose
-/// gamma and palette are unknown is a number that looks authoritative and is
-/// not, and this repository has a lesson about that exact shape of claim.</code></pre>
-<pre><code>    if halves[0].rgb == halves[1].rgb
-        || halves[0].idx == halves[1].idx
-        || halves[0].ansi == halves[1].ansi
-    {
-        notices.push(format!(
-            "pairs.{name} resolves to the same colour on both halves at one of the three \
-             fidelities, which would draw it invisible; the built-in pair is kept"
-        ));
-        return None;
-    }</code></pre>
+<!-- quote:pair-halves-doc -->
+<pre><code><span class="c">/// Both halves of a pair, or `None` when the pair keeps the built-in's.</span>
+<span class="c">///</span>
+<span class="c">/// Two invariants, and neither is negotiable. **Both halves or neither**: a</span>
+<span class="c">/// half-declared pair applied half-way is a foreground against a background</span>
+<span class="c">/// nobody chose. And **`fg != bg` after resolution at every fidelity**, checked</span>
+<span class="c">/// on the resolved values rather than on the hexes, because the realistic</span>
+<span class="c">/// failure is two different hexes collapsing onto the same named colour at</span>
+<span class="c">/// sixteen — which a check on the hexes cannot see.</span>
+<span class="c">///</span>
+<span class="c">/// Not attempted: a contrast ratio. WCAG arithmetic against a terminal whose</span>
+<span class="c">/// gamma and palette are unknown is a number that looks authoritative and is</span>
+<span class="c">/// not, and this repository has a lesson about that exact shape of claim.</span></code></pre>
+<!-- /quote -->
+<!-- quote:pair-collision -->
+<pre><code><span class="k">if</span> halves[0].rgb == halves[1].rgb
+    || halves[0].idx == halves[1].idx
+    || halves[0].ansi == halves[1].ansi
+{
+    notices.push(format!(
+        <span class="s">"pairs.{name} resolves to the same colour on both halves at one of the three \
+         fidelities, which would draw it invisible; the built-in pair is kept"</span>
+    ));
+    <span class="k">return</span> None;
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>pair_halves</code>, <code>half_entry</code>, <code>apply_pairs</code></span>
 
   <p>
@@ -530,23 +550,62 @@ const MAX_NOTICES: usize = 5;</code></pre>
     <code>NO_COLOR</code> does are <a href="terminal.html">The terminal</a>.
   </p>
 
-  <h2 id="shipped">Two themes ship, and the built-in fails the reason one of them exists</h2>
+  <h2 id="shipped">Eleven themes ship, and the built-in fails the reason two of them exist</h2>
 
   <p>
-    <code>.emma/themes/daylight.json</code> and <code>.emma/themes/nocturne.json</code>
-    are read the same way any other theme file is, from whichever of the two
-    directories above holds them &mdash; the copies in this repository's own
-    <code>.emma/</code> are reached as &ldquo;this project&rdquo;'s directory, the
-    same path <code>the_shipped_themes_load_with_nothing_to_report</code> loads
-    them from. Both set all thirteen settable roles by name; neither leaves one
-    to fall back to the built-in.
+    Eleven files sit in <code>.emma/themes/</code>: <code>daylight</code> and
+    <code>nocturne</code>, then <code>cyberpunk</code>, <code>noir</code>,
+    <code>white</code>, <code>gray</code>, <code>blue</code>,
+    <code>green</code>, <code>red</code>, and the pair built for colour
+    blindness, <code>colorblind-light</code> and <code>colorblind-dark</code>.
+    They are read the same way any other theme file is, from whichever of the
+    two directories above holds them; the copies in this repository's own
+    <code>.emma/</code> are reached as &ldquo;this project&rdquo;'s directory.
+    Every one sets all thirteen settable roles by name, so none of them falls
+    back to a built-in colour chosen for a near-black ground.
     <span class="chip test">tested</span>:
     <code>the_shipped_themes_load_with_nothing_to_report</code> loads each
-    through <code>load</code>, asserts zero notices, and asserts every one of
-    the thirteen roles differs from <code>BUILTIN</code>'s &mdash; the test that
-    goes red if a future edit to either file forgets one.
+    through <code>load</code> and asserts zero notices;
+    <code>every_shipped_theme_sets_all_thirteen_roles_and_both_pairs</code> reads the JSON
+    directly rather than going through <code>load</code>, which is the point.
+    A role a file forgets silently keeps the <em>built-in's</em> colour, so the
+    file loads clean and paints the Code page wrong;
+    <code>load</code> cannot tell that from intent, and the absent key can.
   </p>
-  <span class="src">.emma/themes/daylight.json; .emma/themes/nocturne.json; crates/emma/src/term/theme.rs — <code>the_shipped_themes_load_with_nothing_to_report</code></span>
+
+  <p>
+    <strong>The colourblind pair is the one with a hard pass mark, and it
+    failed it once.</strong> Both share a six-hue vocabulary in which
+    <code>string</code> is <code>ok</code>, <code>number</code> is
+    <code>warn</code> and <code>function</code> is <code>err</code>, so the
+    status triple inherits the separation proved for the six source roles
+    instead of being argued twice. The first draft of
+    <code>colorblind-light</code> put <code>err</code> at
+    <code>#b34700</code> and <code>warn</code> at <code>#8a6d00</code>, which
+    are the same colour under deuteranopia &mdash; &ldquo;this failed&rdquo;
+    and &ldquo;this needs attention&rdquo; indistinguishable to roughly six per
+    cent of men, in the theme somebody chooses precisely because they cannot
+    rely on colour. Two people measured it independently, in different colour
+    spaces and with different simulation matrices, and got the same answer. It
+    is fixed; the pair now holds a worst-pair separation of 25 CIELAB
+    &Delta;E<sup>*</sup><sub>ab</sub> or better across normal vision and all
+    three simulations, for both groups.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> The other nine themes were
+    measured under the same simulations and <em>not</em> forced to pass:
+    <code>blue</code> puts <code>keyword</code> and <code>type</code> 0.7 apart
+    under tritanopia, and <code>white</code> puts <code>err</code> and
+    <code>warn</code> 4.1 apart under deuteranopia. That is the honest answer
+    to how an ordinary theme scores, and it is why the pair exists rather than
+    a claim that everything is safe. The tritanopia figures deserve less trust
+    than the other two: the Vi&eacute;not&ndash;Brettel&ndash;Mollon family is
+    fitted for protan and deutan, and its tritan matrix is an approximation
+    &mdash; the two independent measurements agreed on protan and deutan and
+    disagreed on tritan ranking.
+  </p>
+  <span class="src">.emma/themes/*.json; crates/emma/src/term/theme.rs — <code>the_shipped_themes_load_with_nothing_to_report</code>, <code>every_shipped_theme_sets_all_thirteen_roles_and_both_pairs</code></span>
 
   <p>
     <code>daylight.json</code>'s own <code>about</code> field states its reason

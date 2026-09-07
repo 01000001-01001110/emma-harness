@@ -160,12 +160,7 @@ pub struct Nest {
   <p>
     An <code>AgentType</code> stores <code>provider: Option&lt;Arc&lt;dyn
     Provider&gt;&gt;</code>, and <code>None</code> is the specification rather
-    than an optimisation. A file that names no model is asking to run on
-    whatever the caller is running on, and since <code>/model</code> that is a
-    fact which changes mid-session. Holding a clone of the parent's client in the
-    struct would freeze it at boot: after a <code>/model</code>, every subagent
-    that named no model would go on using the model the user had just changed
-    away from, silently, while the status row said otherwise.
+    than an optimisation. The field's own doc gives the argument:
   </p>
 
 <pre><code>pub type ProviderFor&lt;'a&gt; = dyn Fn(Option&lt;&amp;str&gt;) -&gt; Option&lt;Arc&lt;dyn Provider&gt;&gt; + 'a;
@@ -268,10 +263,9 @@ struct AgentType {
   <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, the Setup block</span>
 
   <p>
-    <code>Mode::Batch</code> is the one line that reads as a preference and is
-    not. A subordinate <code>Term</code> swallows the assistant's prose, so a
-    streamed delegation would be bytes assembled and then dropped. The sub
-    reports once, at the end, through the tool result.
+    <code>Mode::Batch</code> is forced: a subordinate <code>Term</code> swallows
+    the assistant's prose, so a streamed delegation would be bytes assembled and
+    then dropped. The sub reports once, at the end, through the tool result.
   </p>
   <span class="src">crates/emma/src/delegate.rs — Delegate::invoke; crates/emma/src/term.rs — Term::subordinate</span>
 
@@ -279,11 +273,8 @@ struct AgentType {
 
   <p>
     A nested <code>Agent</code> driving the process's status meters is a bug that
-    already happened: <code>set_budgets</code> re-pointed the context and token
-    meters at the sub's caps for the rest of the process,
-    <code>goal_ended</code> stopped the parent's clock while the parent was
-    still running, and <code>spent</code> fed the live line a per-goal figure
-    smaller than the parent's, so the meter jumped backwards mid-goal.
+    already happened, and <code>Term::subordinate</code> is what it cost. Its doc
+    names the three meters that went wrong:
   </p>
 
 <pre><code>    <span class="c">/// A nested run's view of this terminal.</span>
@@ -339,12 +330,9 @@ struct AgentType {
 
   <p>
     <code>meter</code> is one funnel rather than four <code>if</code>s, so a
-    fifth meter added later cannot forget the rule. What a subordinate terminal
-    does <em>not</em> swallow is the approval prompt: a subagent inherits the
-    gate, and a prompt the user cannot see is the same defect as one they cannot
-    evaluate. <code>prompt_header</code>, <code>prompt_question</code>,
-    <code>prompt_network_question</code> and <code>prompt_answered</code> render
-    exactly as they do for the parent, and so do tool lines and notes.
+    fifth meter added later cannot forget the rule. The approval prompt is the
+    exception it must not swallow: a subagent inherits the gate, and a prompt the
+    user cannot see is the same defect as one they cannot evaluate.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>constructing_an_agent_never_moves_the_status_meters</code> and
@@ -399,12 +387,8 @@ struct AgentType {
   <span class="src">crates/emma/src/session.rs — SessionLog::subagent, with the tail of its doc</span>
 
   <p>
-    Without the <code>sub.</code> prefix on record kinds, a sub
-    <code>assistant</code> record arriving between the parent's
-    <code>tool_call</code> and its <code>tool_result</code> would call
-    <code>close_turn</code>, place the parent's held turn without its results,
-    fail <code>answered()</code>, and drop the parent's whole turn from every
-    resume of that session. <span class="chip test">tested</span>
+    Without that prefix the parent loses a whole turn from every resume of the
+    session, as the doc above sets out. <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>folding_a_session_containing_a_delegation_returns_the_parents_conversation</code>
     asserts the parent's message list is unchanged.
@@ -416,8 +400,7 @@ struct AgentType {
     <code>parent_turn_id</code> and <code>agent</code>. <code>sub_id</code> is
     <code>format!("sub-{}-{n}", ctx.turn_id)</code> where <code>n</code> comes
     off an <code>AtomicU64</code> on the tool, so two delegations in one parent
-    turn are <code>sub-turn-1-1</code> and <code>sub-turn-1-2</code> and the file
-    can be greppable back apart by delegation, by parent turn, or by agent type.
+    turn are <code>sub-turn-1-1</code> and <code>sub-turn-1-2</code>.
     <span class="chip cert">certified</span> A real record on this machine
     carries <code>"sub_id": "sub-turn-1-1"</code>, <code>"parent_turn_id":
     "turn-1"</code>: <code>grep '"kind": *"delegation"'

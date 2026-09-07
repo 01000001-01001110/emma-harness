@@ -127,7 +127,7 @@
     width flag, so which rule a keystroke granted is answered by the type and not
     by an argument that can be passed wrong. Their content is not carried on the
     variant either: the rule is composed by the gate, from the tool and the host
-    it is holding, and shown to the user in the question. An <code>Answer</code>
+    it is holding, and shown to you in the question. An <code>Answer</code>
     carrying its own rule string would be a second place for the granted rule to
     be decided, one of them out of sight of the prompt that displayed it.
   </p>
@@ -193,10 +193,10 @@ loop {
 
   <p>
     Input is trimmed and lowercased, so <code>Y</code> and
-    <code>&nbsp;yes&nbsp;</code> work. An empty line is <code>n</code>. An
-    unrecognised line prints the keys that were actually offered and asks again.
-    End of input (<code>line?</code> returning <code>None</code>) leaves the
-    caller with the "no approval was given" denial.
+    <code>&nbsp;yes&nbsp;</code> work. An unrecognised line prints the keys that
+    were offered and asks again. End of input (<code>line?</code> returning
+    <code>None</code>) leaves the caller with the "no approval was given"
+    denial.
   </p>
 
   <div class="note warn">
@@ -383,8 +383,8 @@ loop {
   <h2 id="preview">What the prompt shows</h2>
 
   <p>
-    A prompt the reader cannot evaluate is useless as consent and leaves a record
-    saying they agreed. <code>preview</code> has one arm per tool that can change
+    A prompt you cannot evaluate is useless as consent and leaves a record saying
+    you agreed. <code>preview</code> has one arm per tool that can change
     something. The fallback is pretty-printed JSON, visibly worse, which pushes
     whoever adds the next writing tool to write a real arm.
   </p>

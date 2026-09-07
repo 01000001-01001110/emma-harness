@@ -152,7 +152,7 @@
 <p>
   <code>replace_all</code> is refused rather than ignored against an address.
   Accepting and ignoring it would teach the model the flag does nothing, which
-  is the lesson it must never learn about the <code>old_string</code> form.
+  is the wrong lesson to carry back to the <code>old_string</code> form.
 </p>
 
 <h3>Both forms at once, which used to be a seventh refusal</h3>
@@ -179,7 +179,7 @@
   the refusal actionable, because the model can see which of its own two
   instructions was the wrong one. There is still no precedence: picking one
   silently would edit a place the model did not name.
-  <span class="chip test">tested</span> &mdash;
+  <span class="chip test">tested</span>:
   <code>both_forms_that_agree_name_one_place</code> and
   <code>both_forms_that_disagree_are_still_refused</code>, each shown to go red
   when the agreement check is removed.
@@ -229,8 +229,8 @@
 <p>
   <code>old_string</code> occurring three times and the model meaning one of
   them is the case every design gets wrong. Taking the first edits code the
-  model was not looking at; taking the last is the same bug with different luck;
-  editing all three is a refactor nobody asked for. All three return
+  model was not looking at. Taking the last is the same bug with different luck,
+  and editing all three is a refactor nobody asked for. All three return
   <code>Ok</code>, and the damage surfaces later as a test failure in a file the
   transcript never mentions.
 </p>
@@ -286,7 +286,7 @@
 
 <p>
   A line number on its own is a promise the filesystem never made. The model
-  reads line 12, thinks for four turns, and edits line 12, but the user saved a
+  reads line 12, thinks for four turns, and edits line 12, but you saved the
   file in between and an import got added at the top. A line-numbered edit
   applies cleanly to the wrong line and returns <code>Ok</code>.
 </p>
@@ -648,8 +648,8 @@
   So on tokens alone it is close to a wash, and the case does not rest on it. It
   rests on the call that no longer happens: an <code>old_string</code> edit
   against a drifted file was refused outright and cost a full re-read plus a
-  re-emitted edit every time. On a machine where
-  somebody has the file open in an editor, that was the common case.
+  re-emitted edit every time. If you have the file open in an editor while Emma
+  runs, that was the common case.
 </p>
 
 <div class="note warn">

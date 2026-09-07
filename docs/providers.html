@@ -104,11 +104,14 @@
   </p>
 
   <p>
-    Two things you should carry into the sub-pages. First, the ordering: a
-    <code>Request</code> names instructions, tools, history and query in that
-    order because the provider's cache is an exact prefix match, and anything
-    varying per turn has to sit after everything that does not. Second, the
-    direction of a guess: when Emma does not know a model, it guesses a
+    Carry two things into the sub-pages. A <code>Request</code> names
+    instructions, tools, history and query in that order because the provider's
+    cache is an exact prefix match, so anything varying per turn has to sit after
+    everything that does not.
+  </p>
+
+  <p>
+    And guesses lean one way. When Emma does not know a model it assumes a
     <em>low</em> output ceiling and a <em>high</em> cache floor. The first
     failure is a 400 you see. The second is a bill nobody sees.
   </p>
@@ -189,9 +192,9 @@
 
   <p>
     Every function in <code>crates/llm</code>, public and private, is named on
-    one of the eight pages, with the uninteresting ones marked as such rather
-    than passed over in silence. The count is per file, taken from the source
-    above each file's <code>#[cfg(test)]</code> boundary:
+    one of the eight pages, and the uninteresting ones are marked as such. The
+    count is per file, taken from the source above each file's
+    <code>#[cfg(test)]</code> boundary:
   </p>
 
   <div class="tw">

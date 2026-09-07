@@ -148,9 +148,13 @@
     <code>Edit</code> carries <code>old_string</code> and
     <code>new_string</code>, which <em>are</em> the two sides, so the diff is a
     function of the arguments alone and cannot disagree with what the tool will
-    do. What it loses is position, so <code>Patch::anchored</code> is false and
-    no <code>@@</code> header is printed. A <code>@@ -1</code> there would be an
-    invented fact.
+    do.
+  </p>
+
+  <p>
+    What <code>Edit</code> loses is position, so <code>Patch::anchored</code> is
+    false and no <code>@@</code> header is printed. A <code>@@ -1</code> there
+    would be an invented fact.
     <span class="chip test">tested</span>:
     <code>an_unanchored_diff_prints_no_line_numbers_it_does_not_have</code>
     asserts the absence <em>and</em> that a whole-file diff does carry them,
@@ -405,11 +409,14 @@ fn text_of(out: &amp;Out) -&gt; String {
     <code>changes_a_file(tool)</code> is <code>matches!(tool, "Write" |
     "Edit")</code>, and it is consulted by two callers so that &ldquo;the diff is
     drawn&rdquo; and &ldquo;the diff is not repeated&rdquo; cannot come apart.
-    <code>Term::tool_started</code> draws it; <code>Term::prompt_header</code>
+    <code>Term::tool_started</code> draws it. <code>Term::prompt_header</code>
     skips echoing the preview for the same set, because otherwise the same forty
     rows land on screen twice in a row, and <em>&ldquo;a reader scrolling back
     through two copies of a diff has to work out whether they are two
     changes.&rdquo;</em>
+  </p>
+
+  <p>
     <span class="chip test">tested</span> from the other file:
     <code>the_tools_whose_diff_is_drawn_are_exactly_the_ones_the_prompt_does_not_repeat</code>
     is written as &ldquo;these are the same set&rdquo; rather than as two

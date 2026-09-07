@@ -28,6 +28,28 @@ out for themselves.
 
 ## Unreleased
 
+- **Nine more themes ship in `.emma/themes/`, so `/theme` now offers eleven
+  files plus the built-in `emma`.** `cyberpunk`, `noir`, `blue`, `green`, `red`
+  and `colorblind-dark` are for a dark terminal; `white`, `gray` and
+  `colorblind-light` are for a light one, which is a case Emma had only one
+  answer for before. Each sets all thirteen settable roles — including the six
+  that colour source on the Code page, so opening a file no longer drops back to
+  the built-in's colours — and both pairs, and each names the background it was
+  designed against in its `about`.
+
+  Every palette was measured rather than eyeballed: WCAG contrast of all twelve
+  foreground roles against the theme's own `ground`, and CIELAB separation of
+  the six source roles from each other, re-run under simulated protanopia,
+  deuteranopia and tritanopia. The `colorblind-light` and `colorblind-dark` pair
+  are the two that are *held* to those numbers: their six source roles and their
+  `ok`/`err`/`warn` triple stay at least dE*ab 26 and 25 apart respectively under
+  normal vision and all three simulations, so "passed" and "failed" cannot come
+  out the same colour. In every theme `comment` is the quietest thing on screen
+  and is the one role allowed below 4.5:1; nothing is below 3:1.
+
+  Nobody has looked at any of these on a real terminal — the numbers come from
+  the hex values, and a cell buffer is not a console.
+
 - **A language server can be declared in `settings.json`, without a new
   build.** A `servers` map inside the `lsp` block takes a key, the file
   extensions it answers for, and the command to run; the entry becomes a

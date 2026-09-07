@@ -426,31 +426,39 @@ pub struct Cap {
   <p>
     &ldquo;Cheap at transcript scale&rdquo; was the plan's assertion, and the
     module turned it into a measurement rather than leaving it.
-    <code>a_full_buffer_rewraps_faster_than_a_frame</code> builds 1,000 entries
-    of a realistic mix and re-wraps 120 columns to 80.
+    <code>a_full_buffer_rewraps_for_no_more_than_it_cost_to_wrap</code> builds
+    1,000 entries of a realistic mix and re-wraps 120 columns to 80.
   </p>
 
   <pre><code>$ cargo test -p emma --lib \
-    term::transcript::tests::a_full_buffer_rewraps_faster_than_a_frame -- --nocapture
+    term::transcript::tests::a_full_buffer_rewraps_for_no_more_than_it_cost_to_wrap -- --nocapture
 
-rewrap: 1000 entries, 5000 rows, 21.1768ms</code></pre>
+rewrap: 1000 entries, 5000 rows, 26.3535ms against 25.3215ms to build</code></pre>
 
   <p>
-    <span class="chip cert">certified</span> 2026-08-16 at <code>62ab9c3</code>,
-    debug build, Windows 11, and repeatable with the command above. That
-    reproduces the module's recorded 21&nbsp;ms debug figure exactly; its
-    companion 3.5&nbsp;ms release figure was not re-run for this page.
-    <span class="chip unv">unverified</span>: the module extrapolates linearly
-    to roughly 35&nbsp;ms at the full 50,000-row cap, which would be two frames
-    rather than none, and nobody has measured at the cap. Building 10,000
-    entries and timing one <code>set_width</code> would settle it.
+    <span class="chip cert">certified</span> 2026-09-07 on this box, debug
+    build, Windows 11, and repeatable with the command above.
   </p>
 
   <p>
-    The assertion's bound is a hundred milliseconds rather than sixteen, and the
-    doc says why: <em>&ldquo;this runs on whatever machine CI has and a flaky
-    timing test gets deleted, which would lose the measurement
-    entirely.&rdquo;</em> The real number is printed on every run.
+    <strong>The assertion is a ratio, not a stopwatch, and it used to be the
+    other way round.</strong> The bound was a wall-clock hundred milliseconds
+    until the test went red on a shared CI runner in a debug build while the
+    algorithm was as fast as it had ever been, which is a red that means
+    &ldquo;the runner was busy&rdquo; and teaches people to ignore red. It
+    times the build and the rewrap in the same run on the same machine and
+    requires the rewrap to come in under three times the build, so the claim
+    survives any hardware and still goes red the moment a rewrap becomes
+    asymptotically worse than the original wrap. Both numbers are printed on
+    every run.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Nothing has been measured at the
+    full 50,000-row cap, and the module no longer records an extrapolation to
+    it. Building 10,000 entries and timing one <code>set_width</code> would
+    settle what a rewrap costs there in absolute terms; the ratio above says
+    only that it scales.
   </p>
 
   <div class="note warn">

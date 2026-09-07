@@ -71,7 +71,7 @@
     A rule that accidentally matches everything is the worst defect available in
     this file, so matching is label-wise and length-checked rather than
     substring-based. Every host in the "does not match" column below is one
-    somebody can register today.
+    anyone can register today.
   </p>
   <span class="src">crates/emma/src/permissions.rs — DomainPattern, label_matches</span>
 
@@ -79,7 +79,7 @@
 
   <p>
     <code>DomainPattern</code> holds three fields. <code>raw</code> is the text
-    the operator wrote, kept so the rule renders back exactly.
+    you wrote, kept so the rule renders back exactly.
     <code>any_subdomain</code> is set when the pattern began <code>*.</code>, and
     is split out at parse time because it is the one form whose label count is not
     fixed; mixing it into the general path is how "any depth" becomes "any host".
@@ -132,11 +132,8 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
   <span class="src">crates/emma/src/permissions.rs — DomainPattern::matches, DomainPattern::label_wise</span>
 
   <p>
-    Two guards carry the whole property. The equality on label counts is what
-    stops <code>example.com</code> from matching
-    <code>example.com.attacker.net</code>. The strict inequality on the
-    <code>*.</code> path is what stops <code>*.example.com</code> from covering
-    <code>example.com</code> itself. Relaxing the first from <code>==</code> to
+    Those two guards carry the whole property. Relaxing the label-count equality
+    from <code>==</code> to
     <code>&gt;=</code> turned three tests red at commit <code>20ac400</code>:
     <code>a_domain_rule_does_not_match_a_lookalike_host</code>,
     <code>a_star_inside_a_label_cannot_cross_a_dot</code> and

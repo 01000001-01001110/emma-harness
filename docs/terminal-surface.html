@@ -143,8 +143,8 @@
     <code>-p</code>, <code>Term::silent</code> writes nothing at all, and
     <code>Term::recording</code> is <code>silent</code> plus a
     <code>Vec&lt;String&gt;</code> of what was said. All three set
-    <code>frame: None</code> in their initialisers. They do not decline to draw;
-    they have nothing to draw with.
+    <code>frame: None</code> in their initialisers, so there is no decision to
+    make later: they have nothing to draw with.
     <span class="chip test">tested</span>: <code>printing_never_draws_a_viewport</code>
     and <code>a_silent_terminal_never_draws_and_never_takes_a_terminal</code>,
     which calls every write method in turn to prove none of them reaches for
@@ -338,7 +338,7 @@ fn adopt_utf8_output() -&gt; bool {
   <span class="src">crates/emma/src/term.rs — <code>adopt_utf8_output</code>, <code>CP_UTF8</code>, <code>ORIGINAL_CP</code></span>
 
   <p>
-    Three outcomes, and the middle one is the refusal that is easy to miss. A console
+    Three outcomes, and the middle one is easy to miss. A console
     that was <em>already</em> 65001 returns true without recording an original,
     so <code>restore_console_cp</code> leaves it alone on the way out: it was
     not Emma's to change. A <code>GetConsoleOutputCP</code> of zero means no
@@ -376,8 +376,9 @@ fn adopt_utf8_output() -&gt; bool {
     <span class="h">The glyph set is a consequence, not a choice</span>
     <p>
       <code>prefers_ascii(opted_out, utf8)</code> is two booleans and one
-      <code>||</code>. UTF-8 must be proved before the Unicode set is used; a
-      transcript of question marks reads as a broken program. <code>EMMA_ASCII_FRAME</code>
+      <code>||</code>. UTF-8 must be proved before the Unicode set is used,
+      because a transcript of question marks reads as a broken program.
+      <code>EMMA_ASCII_FRAME</code>
       outranks a console that was successfully moved to UTF-8.
       <span class="chip test">tested</span>:
       <code>a_code_page_change_that_did_not_take_still_gets_ascii</code> asserts
@@ -440,8 +441,11 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
     (<code>set_budgets</code>, <code>goal_started</code>,
     <code>goal_ended</code>, <code>spent</code>) and three are the assistant's
     prose (<code>delta</code>, <code>text</code>, <code>end_of_text</code>).
-    The meters are the half that can go wrong. The doc names the defect it exists to
-    fix: a nested agent driving them would re-point the context and token
+  </p>
+
+  <p>
+    The meters are the half that can go wrong. The doc names the defect it exists
+    to fix: a nested agent driving them would re-point the context and token
     meters at the sub's caps for the rest of the process, stop the parent's
     clock while the parent is still running, and feed the live line a per-goal
     figure smaller than the parent's, so the meter would jump backwards
@@ -451,8 +455,12 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
   <p>
     The four meter calls all go through one private funnel,
     <code>Term::meter</code>, <em>&ldquo;so a meter added later cannot forget
-    the rule&rdquo;</em>. What a subordinate terminal must <strong>not</strong>
-    swallow is the approval prompt: a subagent inherits the gate, and
+    the rule&rdquo;</em>.
+  </p>
+
+  <p>
+    The approval prompt is the thing a subordinate terminal must
+    <strong>not</strong> swallow. A subagent inherits the gate, so
     <code>prompt_header</code>, <code>prompt_question</code>,
     <code>prompt_network_question</code> and <code>prompt_answered</code>
     render exactly as they do for the parent.
@@ -577,7 +585,7 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
   </p>
 
   <p>
-    Two details matter. The needle is assembled at runtime so this file can
+    The needle is assembled at runtime so this file can
     search its own source without matching the literal in the test. The doc
     also names the exception: a block's <em>internal</em> layout may use blank
     rows, as <code>welcome.rs</code> does between its sections.

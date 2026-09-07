@@ -146,15 +146,12 @@ impl Default for Budgets {
   <h2 id="shapes">Ceiling, tripwire, threshold</h2>
 
   <p>
-    The three shapes are not interchangeable and the code says which is which at
-    each site. <code>max_iterations</code> is tested at the top of the loop
-    before anything is sent, so it is a ceiling: a run never makes more calls
+    The shapes are not interchangeable. <code>max_iterations</code> is tested at
+    the top of the loop before anything is sent, so a run never makes more calls
     than that. <code>max_tokens</code> is tested after a call returns, so the
-    call that crosses the line is paid for in full. <code>wall_clock</code> is
-    tested at the top of an iteration and bounds when the loop will decline to
-    <em>start</em> another one, not how long a goal can take.
-    <code>max_context</code> is neither: passing it triggers compaction rather
-    than an ending.
+    call that crosses the line is paid for in full. <code>wall_clock</code>
+    bounds when the loop will decline to <em>start</em> another iteration, which
+    is not how long a goal can take.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
 
@@ -253,7 +250,7 @@ fn cost_tokens(u: &amp;emma_llm::Usage) -&gt; i64 {
     against an unweighted cap, so a 500,000 default fires five calls into a
     barely-started goal while the actual bill for those five calls is a few
     cents. A cap that fires on how long the conversation is rather than on spend
-    is not what somebody typing <code>--max-tokens</code> is asking for. The
+    is not what you are asking for when you type <code>--max-tokens</code>. The
     provider's own numbers are still logged raw; only the arithmetic that
     enforces the cap is weighted.
   </p>
@@ -470,12 +467,9 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
     measurement exists: <code>last_input</code>, the provider's own input count
     for the previous call. The estimate stands in for exactly one case, the first
     check of a goal on a process that has not called the model yet, which is a
-    resume into a large session. The tail used to drop the
-    <code>Compacted</code> result, so a conversation the cap could not shrink
-    grew in silence until a budget or a provider error ended the run; it now
-    warns once per session when compaction answers
-    <code>Nothing</code>, naming the reason and <code>/clear</code>. The
-    argument, and the test, are on
+    resume into a large session. The tail now warns once per session when
+    compaction answers <code>Nothing</code>, naming the reason and
+    <code>/clear</code>. The argument, and the test, are on
     <a href="session-compaction.html">Compaction</a>.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::compact_if_needed</code></span>

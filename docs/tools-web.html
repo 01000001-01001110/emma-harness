@@ -166,9 +166,9 @@
   <code>{n} of {arrived} results shown, cut by count={m}; re-search with
   count={arrived} for the rest &mdash; {arrived} is all this page held</code>.
   The last clause is the part that matters, because it is the difference between
-  a remedy a caller can follow and one that invites a second search for results
-  that were never there. A results page holds what it holds.
-  <span class="chip test">tested</span> &mdash;
+  a remedy you can follow and one that invites a second search for results that
+  were never there.
+  <span class="chip test">tested</span>:
   <code>a_count_below_what_arrived_names_the_cut</code>, which goes red when the
   count of what arrived is replaced by the count of what was kept.
 </p>
@@ -319,7 +319,7 @@
 </p>
 
 <p>
-  The cost is stated: this spawns Chrome, and a stateless read is two to three
+  It costs something. This spawns Chrome, so a stateless read is two to three
   seconds of launch before any bytes are read.
 </p>
 <span class="src">tools/web/src/fetch.rs — module doc</span>
@@ -337,7 +337,7 @@
 
 <p>
   Selectors are off for this tool. It cannot click what it finds, and addresses
-  for a thing nothing can address are a thousand tokens of noise;
+  for a thing nothing can address are a thousand tokens of noise.
   <code>BrowserRead</code> is where they come back.
 </p>
 <span class="src">tools/web/src/digest_md.rs — module doc, <code>Limits::reading</code></span>
@@ -381,7 +381,7 @@
   wrongly. An offset past the end is arithmetic rather than an empty page, so it
   says where the last window starts instead of returning nothing.
   <code>BrowserRead</code> gains the same argument under the same contract.
-  <span class="chip test">tested</span> &mdash;
+  <span class="chip test">tested</span>:
   <code>a_text_cut_names_the_window_and_the_call_that_continues_it</code>.
   <span class="chip unv">unverified</span> against a live page: the two-window
   continuation has only been driven over fixtures here.
@@ -481,8 +481,7 @@
 <p>
   The enum lists seven strings against six named verbs, because <code>back</code>
   and <code>forward</code> share one implementation. <code>timeout_ms</code>
-  defaults to 10,000 and is capped at 60,000, because a wait is a turn the user
-  is watching nothing happen in. An unknown action lists the ones that exist.
+  defaults to 10,000 and is capped at 60,000, because a wait is a turn you spend watching nothing happen. An unknown action lists the ones that exist.
 </p>
 
 <p>
@@ -502,8 +501,7 @@
     <code>chromehand::actions::navigate</code> runs no URL policy of its own,
     because upstream's CLI checked before calling it. Without an explicit check
     in <code>BrowserAct::run</code>, <code>navigate</code> is the one verb that
-    reaches <code>file:///</code> and localhost, from a session the user opened
-    for something else.
+    reaches <code>file:///</code> and localhost, from a session you opened for something else.
     <span class="chip test">tested</span>
   <a href="https://github.com/01000001-01001110/emma-harness/blob/main/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
     <code>navigating_a_session_is_held_to_the_same_url_policy_as_opening_one</code>
@@ -654,14 +652,14 @@
 
 <p>
   <code>MAX_SESSIONS</code> is 2. A persistent Chrome is 200 to 400 MB resident
-  for as long as the session lives; two on a laptop already running
-  rust-analyzer is noticeable, and three is where the user discovers the limit
+  for as long as the session lives. Two on a laptop already running
+  rust-analyzer is noticeable, and three is where you discover the limit
   as swap. The third open is refused with the cap named, so the model learns the
   rule instead of discovering a slow machine.
 </p>
 
 <p>
-  A leaked Chrome is not untidiness. chromehand's own note is that a session's
+  A leaked Chrome costs more than untidiness. chromehand's own note is that a session's
   CDP websocket is unauthenticated on localhost, so while it lives any local
   process can puppet that browser, with a profile that may hold a login. This
   crate has leaked one before, and <code>tools/lsp</code> wrote it down: "<code>tools/web</code>
@@ -705,8 +703,7 @@
   the directory should be so <code>remove_dir_all</code> fails for a reason the
   filesystem supplies, and it asserts the clean cases too. An
   implementation that reported a leak every time would warn after every goal,
-  and a warning that fires when it should not is how an operator learns to skip
-  it. Three mutations go red on three different assertions.
+  and a warning that fires when it should not is how you learn to skip it. Three mutations go red on three different assertions.
 </p>
 
 <p>
@@ -743,8 +740,7 @@
 
 <p>
   The session registry is in memory rather than on disk. chromehand records
-  sessions in <code>.browser-miner/session-&lt;id&gt;.json</code> relative to
-  the working directory, which inside Emma is the user's repository.
+  sessions in <code>.browser-miner/session-&lt;id&gt;.json</code> relative to the working directory, which inside Emma is your repository.
   <code>BrowserPool::open</code> therefore calls chromehand's
   <code>session::open</code>, which does the hard part of a detached spawn with
   no inherited handles, and then deletes the session file it wrote.
@@ -758,8 +754,8 @@
   ends one. The only processes it can touch are the ones this surface started,
   an id not in the pool is refused, and the effect is to undo the change
   <code>BrowserOpen</code> made, including closing an unauthenticated CDP port.
-  The alternative is a prompt on cleanup, where somebody
-  answers <code>n</code> and a browser survives with a live remote-control port.
+  The alternative is a prompt on cleanup, where you answer <code>n</code> and a
+  browser survives with a live remote-control port.
 </p>
 
 <p>
@@ -775,8 +771,7 @@
 <p>
   Two reasons, and neither is a matter of effort. chromehand's second key,
   <code>allow_auto_submit</code>, lives in
-  <code>data/browser-miner-config.json</code> resolved against the process's
-  working directory, which inside Emma is the user's repository, and
+  <code>data/browser-miner-config.json</code> resolved against the process's working directory, which inside Emma is your repository, and
   <code>Bash</code> can write it. A second key both parties can turn is one key.
   Separately, "the payload was shown" cannot be guaranteed from inside a tool:
   the prompt is rendered by the approval gate, and an <code>allow</code> rule or
@@ -800,8 +795,8 @@
   <code>BrowserFill</code> re-reads each field from the live page afterwards, so
   what it reports is what is actually there rather than what was sent, and its
   approval prompt carries the field values rather than a count of them, clipped
-  at 60 characters each. "Fill 4 fields?" is not a question anybody can
-  evaluate, and an unevaluatable prompt manufactures consent.
+  at 60 characters each. "Fill 4 fields?" is not a question you can evaluate,
+  and a prompt you cannot evaluate manufactures consent.
 </p>
 <span class="src">tools/web/src/browser/tools.rs — <code>BrowserFill</code>, <code>PROMPT_VALUE_CHARS</code></span>
 
@@ -820,10 +815,10 @@
     <code>DEFAULT_ALLOWLIST_PATH</code> is <code>data/browser-allowlist.json</code>
     and there is no <code>--allowlist</code> flag anywhere in Emma. Emma reads
     <code>~/.emma/browser-allowlist.json</code>, and only that, via
-    <code>fetch::home_allowlist</code>. So a user following the message writes a
-    file that will never be consulted, in their repository rather than their
-    home directory. The tool descriptions the model sees name the correct path;
-    the runtime refusal does not.
+    <code>fetch::home_allowlist</code>. So if you follow the message you write a
+    file that will never be consulted, in your repository rather than your
+    home directory. The tool descriptions the model sees name the correct path,
+    and the runtime refusal does not.
   </p>
 </div>
 <span class="src">tools/web/src/chromehand/policy.rs — <code>check_interaction</code>, <code>DEFAULT_ALLOWLIST_PATH</code>; tools/web/src/fetch.rs — <code>home_allowlist</code></span>
@@ -902,8 +897,7 @@
   key events so page validation fires, then re-reads every targeted field from
   the live DOM and reports what was requested against what the field now
   contains. It has no submit path and refuses password fields structurally.
-  Submit is a separate verb behind a two-key rule: the calling agent passes a
-  flag and the user has set a key in a config file no agent may edit on their
+  Submit is a separate verb behind a two-key rule: the calling agent passes a flag and you have set a key in a config file no agent may edit on their
   behalf. Either key missing and it exits naming the one that is missing.
   Without the flag, submit is an observe mode that requires a headful session,
   focuses the window, and waits for a human to click.

@@ -234,7 +234,7 @@ if turn.tool_calls().is_empty() {
     <strong>Answered third</strong>, which leaves it meaning what it says: no
     tool has been attempted in this goal, and nothing has been asked of the model
     that it has not already answered. The ending exists because the owner typed
-    <code>hello</code> and was told his exchange had stalled. The distinguishing
+    <code>hello</code> and was told their exchange had stalled. The distinguishing
     signal is tool use rather than wording, and <code>worked</code> is per
     <em>goal</em> rather than per turn, so one tool call anywhere earlier makes
     every later stop a stall however conversational the sentence it stopped on.
@@ -403,8 +403,7 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
 }</code></pre>
 
   <p>
-    Four of the nine interpolate a number from <code>Budgets</code>. The
-    test asserts that.
+    Four of the nine interpolate a number from <code>Budgets</code>.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>every_ending_says_which_limit_fired</code> checks that

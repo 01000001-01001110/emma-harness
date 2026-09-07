@@ -68,12 +68,12 @@
   <h1>Steering: typing while a goal runs</h1>
 
   <p class="lede">
-    Until 2026-09-06 the keyboard was dead while a goal ran, and that was not an
-    oversight: the approval gate drains the line channel before every question,
-    because a <code>y</code> left over from one question must never answer the
-    next. Steering adds a second channel no prompt can read, so words typed
-    mid-goal reach the model at the next turn without ever being able to become
-    an answer.
+    Until 2026-09-06 the keyboard was dead while a goal ran, and there was a
+    reason for it. The approval gate drains the line channel before every
+    question, because a <code>y</code> left over from one question must never
+    answer the next. Steering adds a second channel no prompt can read, so words
+    you type mid-goal reach the model at the next turn without ever being able to
+    become an answer.
   </p>
   <span class="src">crates/emma/src/steering.rs &middot; session_command.rs &middot; term/input.rs &middot; agent.rs &middot; main.rs</span>
 
@@ -180,13 +180,11 @@
   <h2 id="boundary">Which commands may run between two turns</h2>
 
   <p>
-    <code>boundary_of</code> is exhaustive, like <code>name_of</code>
-    beside it, and that is the guard doing its work: a new
-    <code>SessionCommand</code> variant will not compile until
-    somebody has decided whether it is safe to apply between two model calls of
-    a goal that is still running. The test each arm has to pass is not "is it
-    useful mid-goal" but "does it change something the running goal is standing
-    on".
+    <code>boundary_of</code> is exhaustive, like <code>name_of</code> beside it,
+    so a new <code>SessionCommand</code> variant will not compile until somebody
+    has decided whether it is safe to apply between two model calls of a goal
+    that is still running. Each arm answers one question: does it change
+    something the running goal is standing on?
   </p>
 
   <div class="tw">
@@ -255,9 +253,9 @@
     <code>Agent::drain_the_steering_queue</code> runs at the top of each loop
     iteration, which is a boundary that already existed. Text and commands come
     off one queue in the order they were typed, because that is the order they
-    were meant in: somebody who types <code>/mode plan</code> and then "stop
-    editing and explain" means the second under the first, and two queues would
-    apply them in an order nobody chose. Commands run in place, between the
+    were meant in. If you type <code>/mode plan</code> and then "stop editing and
+    explain", you mean the second under the first, and two queues would apply
+    them in an order nobody chose. Commands run in place, between the
     sentences around them.
   </p>
 
@@ -302,16 +300,6 @@ pub fn attributed(lines: &amp;[String]) -&gt; String {
   <span class="src">crates/emma/src/steering.rs &mdash; <code>attributed</code>; crates/emma/src/session.rs &mdash; <code>append_user_text</code></span>
 
   <p>
-    Two constraints shape that function. The register is bracketed and
-    attributed, mirroring the style <code>Goal::opening_turn</code> uses for
-    hook context and for the mirror-image reason: there, text the user did not
-    write must not read as theirs; here, text the user did write arrives
-    somewhere they could not have written it, after tool results, inside a turn
-    the loop composed. A model that cannot tell the difference reads a mid-task
-    correction as part of a tool's output. And it is one string appended to the
-    user turn that is already there, rather than a new turn: two user turns in a
-    row is a 400 from the Messages API, and an assistant turn would be words put
-    in the model's mouth.
     <span class="chip test">tested</span> Replacing the join with a pushed user
     turn turns two tests red, one of them the roles-alternate assertion, which is
     the 400 in test form.
@@ -342,9 +330,9 @@ pub fn attributed(lines: &amp;[String]) -&gt; String {
   </p>
 
   <p>
-    That is the promise the whole seam is built to keep: typing while a goal runs
-    must never be silently dead. Every path either sends the line, queues it with
-    a receipt, runs it, or puts it back in the box with a notice.
+    The promise is that typing while a goal runs is never silently dead. Every
+    path either sends the line, queues it with a receipt, runs it, or puts it
+    back in the box with a notice.
   </p>
   <span class="src">crates/emma/src/main.rs &mdash; the between-goals drain; crates/emma/src/agent.rs &mdash; <code>drain_the_steering_queue</code>, <code>run_at_the_boundary</code></span>
 
@@ -362,10 +350,8 @@ pub struct Steering(Arc&lt;Mutex&lt;Vec&lt;Steer&gt;&gt;&gt;);
   <span class="src">crates/emma/src/steering.rs &mdash; <code>Steering</code>, <code>Steer</code>, <code>global</code></span>
 
   <p>
-    A <code>std::sync::Mutex</code> rather than tokio's, because both sides hold
-    it for the length of a push or a take and neither awaits inside it; the
-    reader is a plain OS thread and cannot await at all. The real run uses one
-    process global, for the reason <code>approval::publish_mode</code> is one:
+    The real run uses one process global, for the reason
+    <code>approval::publish_mode</code> is one:
     the two ends are a detached thread reading the keyboard and a loop several
     frames down <code>main</code>'s stack, and threading a handle between them
     would touch every file in between. Tests never touch the global. They build

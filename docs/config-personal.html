@@ -199,7 +199,7 @@
             heard of, keyed the same way. A declared server is never in the
             default enabled set and has to be named in <code>enabled</code> as
             well, and every run prints a line naming it and the command it
-            resolves to. <strong>This file only</strong> — there is no
+            resolves to. <strong>This file only.</strong> There is no
             project-scoped layer for it, so a cloned repository cannot declare
             a program for Emma to spawn. See
             <a href="tools-lsp.html#declared">an eighth language</a>.</td>
@@ -229,9 +229,9 @@
 
   <p>
     Every field carries <code>skip_serializing_if</code>, so a save writes only
-    what is set. A settings file that grew a <code>tools</code> key because this
-    build knows the word would be a file that mutates on every save, and a file
-    that mutates on every save is one nobody can diff.
+    what is set. A file that grew a <code>tools</code> key because this build
+    knows the word would mutate on every save, and a file that mutates on every
+    save cannot be diffed.
     <span class="chip test">tested</span>:
     <code>tool_settings_round_trip_and_an_empty_block_is_never_written</code>
     asserts the raw text does not contain <code>tools</code> after a save with
@@ -362,9 +362,9 @@ no model was called.</code></pre>
   <h2 id="tools">The <code>tools</code> block</h2>
 
   <p>
-    Four optional strings. These are the sidebar keys a <em>person</em> presses,
-    not anything the model can reach, and they are read by
-    <code>crate::usertools</code> rather than by anything in the harness.
+    Four optional strings. These are the sidebar keys <em>you</em> press, not
+    anything the model can reach, and <code>crate::usertools</code> reads them.
+    Nothing in the harness does.
   </p>
 
   <p class="faint">crates/emma/src/settings.rs · <code>ToolSettings</code></p>
@@ -393,12 +393,9 @@ pub struct ToolSettings {
   <span class="src">crates/emma/src/settings.rs — <code>ToolSettings</code></span>
 
   <p>
-    <strong>Every value is one program name or one absolute path, and never a
-    command line.</strong> A bare name is looked up on <code>PATH</code>; an
-    absolute path is checked for existence. Splitting a string on spaces is the
-    first half of running text through a shell, and a path with a space in it is
-    not an argument boundary. So a value carrying arguments is not split. It
-    fails, and the failure names the rule rather than only the symptom.
+    A bare name is looked up on <code>PATH</code>; an absolute path is checked
+    for existence. A value carrying arguments is not split. It fails, and the
+    failure names the rule rather than only the symptom.
   </p>
 
   <p class="faint">crates/emma/src/usertools.rs · <code>resolve_value</code></p>
@@ -425,9 +422,9 @@ pub struct ToolSettings {
 
   <p>
     The whitespace arm exists because the generic message, "which is not on
-    PATH", sends somebody to check their PATH for a program that was never the
-    problem. A value that does not resolve is an error naming it and is never
-    quietly swapped for a probed default: a silent substitution looks identical
+    PATH", sends you off to check your PATH for a program that was never the
+    problem. A value that does not resolve is an error naming it, and is never
+    quietly swapped for a probed default. A silent substitution looks identical
     to success right up until the wrong program opens.
   </p>
 
@@ -469,17 +466,15 @@ pub struct ToolSettings {
   <span class="src">crates/emma/src/usertools.rs — <code>resolve_editor</code>, <code>probe_first</code>, <code>console_hostable</code>, the module doc</span>
 
   <p>
-    <code>$VISUAL</code> and <code>$EDITOR</code> get the one concession, and it
-    is a concession to the world rather than to the rule: those variables really
-    do hold command lines, so a value there that does not resolve <em>as a
-    whole</em> is skipped and the chain continues to the probe. Skipped, not
-    split. Two smaller behaviours: a <code>.cmd</code> or
-    <code>.bat</code> target is refused with a sentence saying to point the
-    setting at the underlying <code>.exe</code>, because a script cannot own a
-    console window; and <code>settings.json</code> is re-read on every call
-    rather than cached, so the Settings tool's own writes appear on the next
-    frame, while <code>PATH</code> lookups are cached for the life of the
-    process.
+    <code>$VISUAL</code> and <code>$EDITOR</code> get the one concession, because
+    those variables really do hold command lines: a value there that does not
+    resolve <em>as a whole</em> is skipped and the chain continues to the probe.
+    Skipped, not split. A <code>.cmd</code> or <code>.bat</code> target is
+    refused with a sentence saying to point the setting at the underlying
+    <code>.exe</code>, because a script cannot own a console window.
+    <code>settings.json</code> is re-read on every call rather than cached, so
+    the Settings tool's own writes appear on the next frame, while
+    <code>PATH</code> lookups are cached for the life of the process.
   </p>
 
   <h2 id="sampling">The <code>sampling</code> block, where absence is two answers</h2>
@@ -527,9 +522,8 @@ pub struct ToolSettings {
 
   <p>
     The three answers exist because a row showing <code>0.7</code> should be
-    able to say whether a person chose it or whether it is what happens when
-    nobody does, and those are different facts about the same number.
-    <code>/config</code> prints the resolved line with each source named, and a
+    able to say whether you chose it or whether it is what happens when nobody
+    does. <code>/config</code> prints the resolved line with each source named, and a
     goal record carries the same six keys, so a run's knobs are reconstructable
     from disk. A <code>temperature</code> of <code>0.0</code> written by hand is
     <code>manual</code> and travels; it is not read as an absence.
@@ -562,8 +556,7 @@ pub struct ToolSettings {
   <p>
     <strong>Never the project directory.</strong> Nothing in
     <code>auth.rs</code> resolves a path relative to the working directory. The
-    home path is computed rather than searched upward, which is what makes it a
-    property rather than an intention.
+    home path is computed, never searched upward.
     <span class="chip test">tested</span>:
     <code>a_credentials_file_in_the_project_directory_is_ignored</code> plants a
     real <code>credentials.json</code> in a scratch cwd and asserts the error
@@ -632,11 +625,10 @@ expected ident at line 1 column 2</code></pre>
 
   <p>
     <code>crates/emma/src/speech.rs</code> is output only: no capture, no
-    microphone, nothing leaving the machine, and off unless asked for. It landed
-    from a branch that is macOS-only through <code>say(1)</code>, and the owner
-    runs Windows, so it either arrived with a real second implementation or as a
-    setting that says the feature is unavailable here. It has the second
-    implementation: Windows speaks through
+    microphone, nothing leaving the machine, and off unless you ask for it. It
+    landed from a branch that was macOS-only through <code>say(1)</code>, and
+    the owner runs Windows, so it needed a second implementation to be worth
+    anything. It has one. Windows speaks through
     <code>System.Speech.Synthesis.SpeechSynthesizer</code>, driven by a fixed
     script handed to <code>powershell.exe</code>.
     <span class="chip cert">certified</span>: <code>Backend</code> is an enum
@@ -662,14 +654,16 @@ expected ident at line 1 column 2</code></pre>
   </p>
 
   <p>
-    Two decisions came across from the branch rather than being re-derived. A
-    voice is stored by name, so a machine without it falls back to the system
-    default and a synced settings file still starts. And an enhanced voice is a
-    recommendation in the listing rather than a silent substitution, because
-    preferring one would talk a user out of the voice they chose in their own
-    accessibility settings. There is a cut on how much is read: the screen
-    already has the whole answer, so the cap exists to stop a very long one
-    becoming a monologue rather than to keep the spoken part short.
+    Two decisions came across from the branch intact. A voice is stored by name,
+    so a machine without it falls back to the system default and a synced
+    settings file still starts. And an enhanced voice is a recommendation in the
+    listing, never a silent substitution, because preferring one would talk you
+    out of the voice you chose in your own accessibility settings.
+  </p>
+
+  <p>
+    There is a cut on how much is read aloud. The screen already has the whole
+    answer, so the cap is there to stop a very long one becoming a monologue.
   </p>
 
   <p>
@@ -683,7 +677,7 @@ expected ident at line 1 column 2</code></pre>
   </p>
 
   <p>
-    What the Windows arm cannot reach is stated rather than papered over.
+    The Windows arm cannot reach every voice on the machine.
     <code>System.Speech</code> sees only the SAPI5 voices registered under
     <code>HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens</code>, and the more
     natural OneCore voices live under a different key and are invisible to it.
@@ -730,24 +724,24 @@ expected ident at line 1 column 2</code></pre>
   </p>
 
   <p>
-    <strong>Alt+q and Ctrl-C are not in the layer at all</strong>, and that is a
-    hole rather than an omission. They are the way out of a running goal, and a
-    keymap file that could take the exit away is a keymap file that can lock
-    somebody in. <code>REBINDABLE</code> is the whole list rather than a filter
-    applied somewhere else downstream, so there is one place to read to know
-    what can move.
+    <strong>Alt+q and Ctrl-C are not in the layer at all</strong>, and the gap is
+    known. They are the way out of a running goal, and a keymap file that can
+    take the exit away is one that can lock you in. <code>REBINDABLE</code> is
+    the whole list, not a filter applied further downstream, so there is one
+    place to read to know what can move.
   </p>
 
   <p>
-    A file may hold several named presets, and two facts about timing that the
-    Settings rows state separately. <strong>The file is read once, at
-    startup</strong>: nothing watches it, so an edit in an editor applies to the
-    next run, which is the same rule the LSP card follows and for the same
-    reason. <strong>Selecting a preset is live</strong>: every preset was
-    already parsed by that one read, so switching swaps a table this process is
-    holding and binds immediately. Making a preset change wait for a restart
-    would be a control that does nothing on a screen whose whole point is that
-    its controls do something.
+    A file may hold several named presets, and the timing catches people out.
+    <strong>The file is read once, at startup.</strong> Nothing watches it, so an
+    edit you make in an editor applies to the next run. That is the same rule the
+    LSP card follows, for the same reason.
+  </p>
+
+  <p>
+    <strong>Selecting a preset is live.</strong> Every preset was already parsed
+    by that one read, so switching swaps a table this process is holding and
+    binds immediately.
   </p>
 
   <p>

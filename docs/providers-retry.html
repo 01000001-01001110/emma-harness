@@ -82,8 +82,9 @@
   <p class="lede">
     Four attempts, 500 ms doubling, a 20-second ceiling on any single wait
     including one the provider asked for. Three rules govern it, and the third
-    governs visibility during an interactive run: a retry the user cannot see is indistinguishable from a hang, and a user who cannot
-    tell hits Ctrl-C and loses the work.
+    is about visibility during an interactive run. A retry you cannot see is
+    indistinguishable from a hang, and if you cannot tell, you hit Ctrl-C and
+    lose the work.
   </p>
 
   <h2 id="policy">The policy</h2>
@@ -235,8 +236,8 @@ pub(crate) fn retry_after_seconds(raw: Option&lt;&amp;str&gt;) -&gt; Option&lt;D
     cases in eight lines: <code>"3"</code>, <code>" 12 "</code> with
     surrounding whitespace, an HTTP-date which yields <code>None</code>, and no
     header at all. <span class="chip test">tested</span> An unparseable value
-    is indistinguishable from an absent one downstream. That is the intended
-    degradation: the curve takes over.
+    is indistinguishable from an absent one downstream, and the curve takes
+    over.
   </p>
 
   <h2 id="classify">Turning a status into an error</h2>
@@ -283,7 +284,7 @@ pub(crate) fn retry_after_seconds(raw: Option&lt;&amp;str&gt;) -&gt; Option&lt;D
           <th class="num">Status</th>
           <th>Variant</th>
           <th>Retried</th>
-          <th>What the user is told to do</th>
+          <th>What you are told to do</th>
         </tr>
       </thead>
       <tbody>
@@ -395,7 +396,7 @@ fn api_message(body: &amp;str) -&gt; String {
     frame, a truncated tool argument, a body that will not parse, all of them
     return out of that <code>return match mode</code> and never see
     <code>delay_for</code>. Past that point bytes may already have reached the
-    terminal, and a retry would replay text the user has read.
+    terminal, and a retry would replay text you have already read.
     <code>a_mid_stream_error_frame_ends_the_turn</code> asserts the stub saw
     exactly one request. <span class="chip test">tested</span>
   </p>

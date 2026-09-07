@@ -848,6 +848,26 @@ mod tests {
         Role::Func,
     ];
 
+    /// Every theme file this repository ships, by name.
+    ///
+    /// Spelled out rather than discovered, and that is the whole point of it.
+    /// A loop over `names()` cannot notice a theme that has stopped existing —
+    /// it just runs one fewer iteration and stays green. This list turns a
+    /// deleted or renamed file into a failure that says which one.
+    const SHIPPED: [&str; 11] = [
+        "blue",
+        "colorblind-dark",
+        "colorblind-light",
+        "cyberpunk",
+        "daylight",
+        "gray",
+        "green",
+        "nocturne",
+        "noir",
+        "red",
+        "white",
+    ];
+
     /// Write `<home>/.emma/themes/<name>.json` and hand back the home.
     fn user_theme(home: &Path, name: &str, body: &str) {
         let dir = home.join(".emma").join("themes");
@@ -1083,12 +1103,19 @@ mod tests {
     fn the_shipped_themes_load_with_nothing_to_report() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.emma");
         let names = names(None, Some(&root));
-        for want in ["daylight", "nocturne"] {
+        for want in SHIPPED {
             assert!(
                 names.iter().any(|n| n == want),
                 "{want} is not in {names:?}"
             );
         }
+        // The built-in and nothing else besides: a file added to the directory
+        // and never measured should have to walk past this line.
+        assert_eq!(
+            names.len(),
+            SHIPPED.len() + 1,
+            "the shipped set changed: {names:?}"
+        );
         for name in names.iter().filter(|n| n.as_str() != BUILT_IN) {
             let (theme, notices) = load(None, Some(&root), Some(name));
             assert!(notices.is_empty(), "{name}: {notices:?}");
@@ -1111,6 +1138,62 @@ mod tests {
                 theme.pair(Pair::Selection),
                 BUILTIN.pair(Pair::Selection),
                 "{name}"
+            );
+        }
+    }
+
+    /// Every shipped theme names all thirteen settable roles and both pairs.
+    ///
+    /// Read out of the JSON rather than through [`load`], and the distinction
+    /// is the reason the test exists. A role a file never mentions keeps the
+    /// **built-in's** colour, silently and with no notice — and the built-in
+    /// was chosen against a near-black ground. So a light theme that forgot
+    /// `keyword` loads perfectly, reports nothing, and paints the Code page in
+    /// a colour picked for the opposite background. `load` cannot tell that
+    /// apart from a theme that meant it; the file can, because the key is
+    /// simply absent.
+    ///
+    /// This is the specific way the set could rot: the seven chrome roles are
+    /// what an author thinks of, and the six source ones are what they find out
+    /// about when somebody opens a file.
+    #[test]
+    fn every_shipped_theme_sets_all_thirteen_roles_and_both_pairs() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.emma/themes");
+        for name in SHIPPED {
+            let path = dir.join(format!("{name}.json"));
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let doc: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+            let roles = doc
+                .get("roles")
+                .and_then(serde_json::Value::as_object)
+                .unwrap_or_else(|| panic!("{name} has no roles object"));
+            for (spelling, _) in SETTABLE {
+                assert!(
+                    roles.contains_key(spelling),
+                    "{name} never sets roles.{spelling}, so it inherits the built-in's"
+                );
+            }
+
+            let pairs = doc
+                .get("pairs")
+                .and_then(serde_json::Value::as_object)
+                .unwrap_or_else(|| panic!("{name} has no pairs object"));
+            for pair in ["chip", "selection"] {
+                assert!(pairs.contains_key(pair), "{name} never sets pairs.{pair}");
+            }
+
+            // Every contrast figure claimed for these palettes was measured
+            // against the theme's own `ground`, so a theme with no `about`
+            // naming its intended background is a set of numbers nobody can
+            // re-derive.
+            assert!(
+                doc.get("about")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| s.len() > 20),
+                "{name} has no about naming the background it was measured on"
             );
         }
     }

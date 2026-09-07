@@ -81,9 +81,9 @@
     </nav>
 
   <p class="lede">
-    Check in this order, because each step rules out the ones below it.
-    The first question is not "is my key spelled right", it is "did Emma read the
-    file I edited at all", and it is the common answer.
+    Check in this order, because each step rules out the ones below it. Start
+    with "did Emma read the file I edited at all". That is the common answer, and
+    spelling comes after it.
   </p>
 
   <div class="key">
@@ -251,13 +251,13 @@ no model was called.</code></pre>
   </div>
 
   <p>
-    So: if you edited a permissive file, compare your key against the tables on
-    <a href="config-claude.html">the compatibility page</a> and
-    <a href="config-personal.html">your own files</a> by eye. There is no
-    spelling check available, and that is the price of one format belonging to
-    another program and the other being a preference store that must not refuse
-    to start. <code>.emma/config.json</code>'s outer level is the opposite and
-    would have named your key and the whole valid vocabulary.
+    If you edited a permissive file, compare your key by eye against the tables
+    on <a href="config-claude.html">the compatibility page</a> and
+    <a href="config-personal.html">your own files</a>. There is no spelling check
+    available. That is the price of one format belonging to another program and
+    the other being a preference store that must not refuse to start.
+    <code>.emma/config.json</code>'s outer level would have named your key and
+    the whole valid vocabulary.
   </p>
 
   <p>
@@ -273,7 +273,7 @@ no model was called.</code></pre>
 
   <p>
     Everything the harness reads is resolved once at startup into a value the
-    loop consumes; nothing re-reads a configuration file mid-run.
+    loop consumes. Nothing re-reads a configuration file mid-run.
     <code>/theme</code> is the one that surprises people, and the command says so
     itself: a theme is read once, so selecting one <em>is</em> writing it down,
     and there is no <code>--save</code> to forget.
@@ -315,12 +315,11 @@ no model was called.</code></pre>
   <code>ce0dd69</code>, scratch <code>.claude/</code> harness, 2026-08-22. Paths
   elided for width; nothing else altered. <strong>The previous certification on
   this block showed a warning line the current binary cannot produce.</strong>
-  It was accurate at its own build and went on looking green for weeks
-  after the behaviour moved. A dated certification goes on looking green
-  long after the thing it measured has moved.
+  It was accurate at its own build and went on looking green for weeks after the
+  behaviour moved.
 
   <p>
-    So the category still exists and its example had to be replaced.
+    The category still exists and only its example had to be replaced.
     <code>Bash(git log)</code> with no wildcard and no separator is still a
     command prefix; a specifier this build genuinely cannot parse into any of the
     four shapes still loads, still gets named, and still approves nothing.
@@ -355,18 +354,17 @@ no model was called.</code></pre>
 
   <p>
     <strong>Approval.</strong> If Emma keeps asking about something you granted,
-    the rule may be right and not matching. That is
+    the rule may be right and simply not matching. That is
     <a href="consent-matching.html">Consent &amp; permissions</a>, not this
-    chapter. And the gate is a consent interface rather than a sandbox: it
-    enforces nothing a tool does not honestly declare, and <code>Bash</code> can
-    do anything.
+    chapter. The gate is a consent interface: it enforces nothing a tool does not
+    declare about itself, and <code>Bash</code> can do anything.
   </p>
 
   <p>
-    <strong>An unknown <code>/word</code>.</strong> It is not an error and not a
-    missing command. Anything that is not a known command file passes through to
-    the model as ordinary text, which is indistinguishable from a command that
-    "did nothing" if you were expecting an expansion.
+    <strong>An unknown <code>/word</code>.</strong> Anything that is not a known
+    command file passes through to the model as ordinary text. If you were
+    expecting an expansion, that is indistinguishable from a command that did
+    nothing.
   </p>
 
   <h2 id="messages">The refusals, by their first line</h2>
@@ -374,8 +372,8 @@ no model was called.</code></pre>
   <p>
     Every one of these was produced by the release binary at
     <code>62ab9c3</code> on 2026-08-16, in a scratch tree, and each is quoted
-    from its run elsewhere in the chapter. They are gathered here because the
-    thing a person has in front of them is the message, not the page.
+    from its run elsewhere in the chapter. They are gathered here because what
+    you have in front of you is the message, not the page.
   </p>
 
   <div class="tw">

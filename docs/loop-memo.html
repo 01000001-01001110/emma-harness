@@ -222,9 +222,8 @@ place(&amp;mut query, &amp;mut pending_turn, results);</code></pre>
 
   <p>
     <code>clear()</code> empties the whole set, not the key that just succeeded.
-    That is the rule: one success anywhere means the world may have changed, so
-    every remembered failure is worth trying again. The two collections are
-    different in shape and lifetime. <code>failed_now</code> is a set of memo
+    One success anywhere means the world may have changed. The two collections
+    differ in shape and lifetime. <code>failed_now</code> is a set of memo
     keys that is emptied on any success; <code>failed_ever</code> is a list of
     human-readable labels that is never emptied, deduplicated by
     <code>contains</code>, and trimmed to the last twenty. The kick quotes the
@@ -336,11 +335,8 @@ pub struct Resumed {
   <p>
     It travels as a <code>Vec&lt;String&gt;</code> and becomes a set on arrival:
     <code>let mut failed_now: HashSet&lt;String&gt; = resumed.failed_now.into_iter().collect();</code>.
-    <code>memo_key_of</code> exists so the restoring code can build the same key
-    from the two fields a session record has, which is not a
-    <code>ToolCall</code>. A second definition would restore a set that never
-    matches, and the symptom would be a memo that silently does nothing, which
-    no test asserting "the tool ran" would catch.
+    The silent-memo failure the <code>memo_key_of</code> comment warns about is
+    one no test asserting "the tool ran" would catch.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Resumed</code>, <code>Agent::run_goal</code>, <code>memo_key_of</code></span>
 

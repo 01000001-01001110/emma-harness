@@ -167,14 +167,14 @@ pub fn opening_turn(&amp;self) -&gt; String {
 }</code></pre>
 
   <p>
-    Injected context is a third thing, neither the user's words nor the standing
+    Injected context is a third thing, neither your words nor the standing
     contract, and each of the three other places it could have gone is wrong for
     its own reason. In the system prompt it would be per-turn bytes inside the
     cached prefix, rewriting the entry every turn and paying 1.25× for the whole
-    prompt instead of reading it at 0.1×. Merged into the user's sentence it
-    would be an instruction they did not write. As its own message before theirs
-    it would be two user turns in a row, which the API rejects. So it rides at
-    the front of the same user turn, attributed, separated by a blank line.
+    prompt instead of reading it at 0.1×. Merged into your sentence it would be
+    an instruction you did not write. As its own message before yours it would be
+    two user turns in a row, which the API rejects. So it rides at the front of
+    the same user turn, attributed, separated by a blank line.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>Goal::opening_turn</code></span>
 
@@ -358,10 +358,14 @@ fn is_decoration(c: char) -&gt; bool {
     that case and expensive in the one nobody had written down: a marker
     followed by its own retraction, "Actually wait. The tests still fail",
     ended the goal <code>Done</code> with the correction sitting where nobody
-    would read it.     One detail from the old rule survives in the scan: trailing <em>blank</em>
-    lines still do not cost the claim, because
-    the scan walks back to the last line with anything on it. A footer after
-    the marker now does cost it, and buys a kick rather than a wrong answer.
+    would read it.
+  </p>
+
+  <p>
+    One detail from the old rule survives in the scan. Trailing <em>blank</em>
+    lines still do not cost the claim, because the scan walks back to the last
+    line with anything on it. A footer after the marker now does cost it, and
+    what you get instead is a kick rather than a wrong answer.
     <code>eq_ignore_ascii_case</code> means <code>goal complete</code> counts,
     and five decoration characters are stripped from both ends: asterisk,
     backtick, hash, underscore, space.
@@ -377,7 +381,7 @@ fn is_decoration(c: char) -&gt; bool {
 
   <p>
     The marker is a ritual between the loop and the model, printed into prose a
-    person is reading. Emma's kick needs the signal and the user does not need to
+    person is reading. Emma's kick needs the signal and you do not need to
     see it, and those are separable: <code>verdict</code> reads the model's real
     text, <code>Outcome::text</code> keeps it verbatim, and the filter is applied
     on the way to the terminal only.
@@ -490,10 +494,9 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
 }</code></pre>
 
   <p>
-    Three arms. The third separates a line whose bytes run past the marker's
-    length from one that is still a prefix.
-    so a line whose bytes run past the marker's length is not it, and a shorter
-    line is compared as a prefix.
+    Three arms. The third is the length comparison: a line whose bytes run past
+    the marker's length can no longer become it, and a shorter line is compared
+    as a prefix.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>could_become_marker</code></span>
 
@@ -542,17 +545,17 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
     <code>cargo test</code> against a target with no tests, a <code>test -f</code>
     against a path that was already there, a suite whose failing case was deleted
     rather than fixed; it also cannot express goals with no mechanical criterion,
-    which is most of what a person types. <em>No open tasks remain</em> is the
-    most legible, because a user can watch the file in an editor, and legible is
-    not honest: a model that learns closing tasks ends the loop will close them,
+    which is most of what you type. <em>No open tasks remain</em> is the most
+    legible, because you can watch the file in an editor, and legible is not the
+    same as true: a model that learns closing tasks ends the loop will close them,
     and a model that never opened one has an empty list from turn zero, which
     reads as done before it has started.
   </p>
   <span class="src">crates/emma/src/goal.rs — module doc</span>
 
   <p>
-    The intended upgrade is not to replace one signal with another but to make
-    bookkeeping insufficient: use the task count to decide when to <em>stop
+    The intended upgrade makes bookkeeping insufficient rather than swapping one
+    signal for another: use the task count to decide when to <em>stop
     asking</em>, and gate the verdict behind something the model does not author.
     That is a second <code>impl</code> and a different value in
     <code>Setup</code>, not surgery on the loop, which is why

@@ -540,8 +540,8 @@ struct Facts {
   <p>
     Four categories say <code>none</code> when they are empty. The residual stays
     quiet instead, and so does <code>refused or blocked</code>: an empty bucket
-    has nothing to disclose, and <code>other tool calls: none</code> on every
-    footer adds noise without disclosing anything. <span class="chip test">tested</span>
+    discloses nothing, and <code>other tool calls: none</code> on every footer is
+    noise. <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
     The empty-record test asserts <code>files touched: none</code> and
     <code>fetched: none</code> are present and that <code>other tool calls</code>

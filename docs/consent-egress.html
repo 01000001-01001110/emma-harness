@@ -211,9 +211,7 @@
 
   <p>
     The <code>let ... else</code> is the one fail-closed branch in the file. The
-    other reading, "no target, so nothing to gate", would hand silent network
-    access to whichever tool forgets to implement <code>network_target</code>.
-    The denial text tells the model this is a defect in that tool rather than
+    denial text tells the model this is a defect in that tool rather than
     something to route around. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_tool_that_declares_egress_and_names_no_host_is_denied</code> queues
     two <code>Yes</code> answers, so a gate that fell through to a prompt would
@@ -335,7 +333,7 @@
     <code>Answer::AlwaysThisTool</code> land in the same match arm, because a
     <code>y</code> already covers this host for the rest of the session. Accepting
     <code>a</code> and giving it a different meaning would be a keystroke that
-    silently grants a tool where the reader thinks they granted a host. The enum
+    silently grants a tool where you think you granted a host. The enum
     that carries this distinction is <code>Question</code>, whose only job is to
     keep the wording on screen from drifting from the set the answer is filed
     under.

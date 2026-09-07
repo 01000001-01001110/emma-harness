@@ -134,10 +134,17 @@
   point the caller meant.
 </p>
 
+<!-- quote:cursor-schema -->
 <pre><code><span class="c">/// The one sentence every schema here says about `file_path`.</span>
+<span class="c">///</span>
+<span class="c">/// All seven tools take the same argument and it means the same thing in each,</span>
+<span class="c">/// so it is written once: four copies of a sentence the model learns the tool</span>
+<span class="c">/// surface from is four chances for one of them to say something else.</span>
 <span class="k">const</span> FILE_PATH_DESCRIPTION: &amp;<span class="k">str</span> =
     <span class="s">"A source file inside the working directory. Emma picks the language server from the \
      extension."</span>;
+
+<span class="c">// …</span>
 
 <span class="k">fn</span> cursor_schema(after: &amp;<span class="k">str</span>) -&gt; Value {
     json!({
@@ -152,6 +159,7 @@
         <span class="s">"additionalProperties"</span>: <span class="k">false</span>,
     })
 }</code></pre>
+<!-- /quote -->
 
 <p>
   Each of the two writes its own <code>after</code> description, which is why
@@ -164,13 +172,15 @@
   the model something different about one tool.
 </p>
 
+<!-- quote:position-schema -->
 <pre><code><span class="k">fn</span> position_schema(extra: Option&lt;(&amp;<span class="k">str</span>, Value)&gt;) -&gt; Value {
-    <span class="k">let mut</span> properties = json!({
+    <span class="k">let</span> <span class="k">mut</span> properties = json!({
         <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: FILE_PATH_DESCRIPTION },
         <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the symbol appears on."</span> },
         <span class="s">"symbol"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once."</span> },
         <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the name appears more than once."</span> }
     });</code></pre>
+<!-- /quote -->
 
 <p>
   A name rather than a column, because asking a model for a column offset gets a
@@ -359,17 +369,20 @@
   probing a shell means running something; <code>--version</code> runs nothing.
 </p>
 
+<!-- quote:rustup-proxy -->
 <pre><code><span class="c">//! ```text</span>
 <span class="c">//! $ rust-analyzer --version</span>
-<span class="c">//! error: Unknown binary 'rust-analyzer.exe' in official toolchain '…'</span>
+<span class="c">//! error: Unknown binary 'rust-analyzer.exe' in official toolchain</span>
+<span class="c">//! '1.94.1-x86_64-pc-windows-msvc'.</span>
 <span class="c">//! ```</span>
 <span class="c">//!</span>
 <span class="c">//! `~/.cargo/bin/rust-analyzer` exists as a rustup proxy whether or not the</span>
 <span class="c">//! component behind it is installed. It is first on `PATH`, it is a real file,</span>
-<span class="c">//! and it exits **0** while printing that to stderr — so a chosen-by-existence</span>
-<span class="c">//! search picks a binary that will never speak LSP, and the failure surfaces</span>
-<span class="c">//! much later as a handshake that times out. Measured on this machine on</span>
-<span class="c">//! 2026-08-11, which is why the search costs one process spawn.</span></code></pre>
+<span class="c">//! and a chosen-by-existence search picks a binary that will never speak LSP,</span>
+<span class="c">//! so the failure surfaces much later as a handshake that times out. Which</span>
+<span class="c">//! candidates are probed, and for what, is [`crate::lang::Identity`], and the</span>
+<span class="c">//! reason a bundled `server.js` is *not* probed is recorded there.</span></code></pre>
+<!-- /quote -->
 
 <p>
   The probe requires <em>stdout</em> to start with <code>rust-analyzer</code>,
@@ -793,12 +806,39 @@ fn: describe  fn(d: &amp;Declared) -&gt; String  (line 5)</code></pre>
 
 <h2 id="readonly">What makes <code>read_only</code> and <code>reaches_network</code> true</h2>
 
-<pre><code><span class="k">pub const</span> INIT_OPTIONS: &amp;<span class="k">str</span> = <span class="s">r#"{
+<!-- quote:init-options -->
+<pre><code><span class="c">/// What rust-analyzer is told at `initialize`, and the reason `read_only: true`</span>
+<span class="c">/// is not a lie.</span>
+<span class="c">///</span>
+<span class="c">/// Three switches are off, and each of them is off because leaving it on would</span>
+<span class="c">/// make an *analysis* tool run the analysed project's code or write into its</span>
+<span class="c">/// build directory:</span>
+<span class="c">///</span>
+<span class="c">/// - `check.enable`: rust-analyzer's default behaviour runs `cargo check` on</span>
+<span class="c">///   save. That is a compiler writing megabytes into `target/`, started by a</span>
+<span class="c">///   tool the approval gate lets through without asking anybody.</span>
+<span class="c">/// - `cargo.buildScripts.enable`: `build.rs` is arbitrary code from the</span>
+<span class="c">///   repository under analysis. Emma will read a stranger's repository; it will</span>
+<span class="c">///   not execute its build scripts to answer "where is this used".</span>
+<span class="c">/// - `procMacro.enable`: proc macro expansion loads compiled macro libraries,</span>
+<span class="c">///   which only exist because build scripts and a build produced them.</span>
+<span class="c">///</span>
+<span class="c">/// `cargo.extraArgs: ["--offline"]` is the fourth, and it is what makes</span>
+<span class="c">/// `reaches_network: false` true by construction rather than by hope.</span>
+<span class="c">///</span>
+<span class="c">/// **The cost, stated because the tools state it to the model too.** Without</span>
+<span class="c">/// proc macros, items generated by `derive` and by attribute macros are not in</span>
+<span class="c">/// the index, and references *into* macro-generated code will be missed. That</span>
+<span class="c">/// is a real hole in exactly the direction this crate is most dangerous — a</span>
+<span class="c">/// confidently short answer — which is why it is also rust's [`Language::caveat`]</span>
+<span class="c">/// and reaches the model on every result.</span>
+<span class="k">pub</span> <span class="k">const</span> RUST_INIT: &amp;<span class="k">str</span> = <span class="s">r#"{
   "check": { "enable": false },
   "checkOnSave": false,
   "cargo": { "buildScripts": { "enable": false }, "extraArgs": ["--offline"] },
   "procMacro": { "enable": false }
 }"#</span>;</code></pre>
+<!-- /quote -->
 
 <p>
   Checking, build scripts and proc macros are the three ways rust-analyzer
@@ -816,7 +856,7 @@ fn: describe  fn(d: &amp;Declared) -&gt; String  (line 5)</code></pre>
   a confidently short answer, which is why it is in the tool descriptions and
   not only in the source.
 </p>
-<span class="src">tools/lsp/src/client.rs — <code>INIT_OPTIONS</code></span>
+<span class="src">tools/lsp/src/lang.rs — <code>RUST_INIT</code>; tools/lsp/src/client.rs — <code>INIT_OPTIONS</code>, which is now that constant under its old name</span>
 
 <h2 id="cut">What was cut</h2>
 

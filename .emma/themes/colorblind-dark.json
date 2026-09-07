@@ -1,0 +1,23 @@
+{
+  "name": "colorblind-dark",
+  "about": "For a dark terminal, measured against #15171a. Built from the Okabe-Ito qualitative families, then solved rather than picked: every one of the six source roles stays at least dE*ab 25 from every other under normal vision AND under simulated protanopia, deuteranopia and tritanopia. `string`, `number` and `function` are the same colours as `ok`, `warn` and `err` on purpose — one vocabulary, so the status triple inherits the separation proved for the source six instead of being argued for twice.",
+  "roles": {
+    "dim":      { "hex": "#9aa1ab", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#4acf97", "ansi16": "light_green" },
+    "err":      { "hex": "#e5533f", "ansi16": "light_red" },
+    "warn":     { "hex": "#ebf146", "ansi16": "light_yellow" },
+    "info":     { "hex": "#56b4e9", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#cc79a7", "ansi16": "light_magenta" },
+    "ground":   { "hex": "#15171a", "ansi16": "black" },
+    "comment":  { "hex": "#7a8285", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#e6d6e6", "ansi16": "magenta" },
+    "string":   { "hex": "#4acf97", "ansi16": "green" },
+    "number":   { "hex": "#ebf146", "ansi16": "yellow" },
+    "type":     { "hex": "#3696bf", "ansi16": "cyan" },
+    "function": { "hex": "#e5533f", "ansi16": "red" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#25282e" }
+  }
+}

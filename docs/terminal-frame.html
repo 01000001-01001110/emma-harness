@@ -546,7 +546,7 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     that the string <code>out.push_str(SYNC_END)</code> still appeared,
     and that is a false receipt of the exact kind this repository has a name
     for: the grep matched a literal that also existed inside the assertion
-    itself, so the test could not fail. Behaviour is checked now, not spelling.
+    itself, so the test could not fail. It checks the behaviour now.
   </p>
 
   <h2 id="anchoring">Anchoring, which is now only the resize path</h2>
@@ -657,10 +657,13 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
     loop carries it, <code>Status::record_call</code> sums it per call, and both
     reach the bar as <code>Some</code>. It is session-scoped, and so is the
     <code>TOKENS</code> cell's <code>total_used</code>, which is
-    <code>session_tokens</code> rather than <code>spend</code>. Feeding
-    <code>spend</code> there is what made the cell reset on every submission on
-    2026-08-26. <code>spend</code> is the running <em>goal</em>'s budget meter
-    and belongs to the inline row.
+    <code>session_tokens</code> rather than <code>spend</code>.
+  </p>
+
+  <p>
+    Feeding <code>spend</code> there is what made the cell reset on every
+    submission on 2026-08-26. <code>spend</code> is the running <em>goal</em>'s
+    budget meter and belongs to the inline row.
     <code>total_max</code> is still the goal's cap only because the
     full-screen cell draws no cap at all: there is no session budget, and
     inventing one to fill the field would put a number on screen that nothing

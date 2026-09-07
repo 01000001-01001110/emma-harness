@@ -159,9 +159,9 @@ largest file          272,923 bytes  sess-1786385316950-34808.jsonl</span></code
     <code>goal</code> record and says so.
     <a href="session-resume.html"><code>locate</code></a> and the
     <a href="session-continuity.html">first-run scan</a> read each one, find no
-    matching record, and move on. What the empty files cost is a file read each
-    in both scans, and what they cost a reader is that every count anyone quotes
-    about this directory has to subtract them first.
+    matching record, and move on. The empty files cost a file read each in both
+    scans, and they cost you a subtraction on every count anyone quotes about
+    this directory.
   </p>
 
   <h2 id="compaction">Compaction has never fired here</h2>
@@ -307,8 +307,8 @@ max(r['input_tokens'] + r['cache_read_input_tokens'] + r['cache_creation_input_t
   </p>
 
   <p>
-    <code>context</code> is the field that keeps the rest honest, and it has
-    three values. <code>per_turn</code> means the message list is the one that
+    <code>context</code> says how far the message list can be trusted, and it
+    has three values. <code>per_turn</code> means the message list is the one that
     turn's request carried, rebuilt by <code>session::fold_prefixes</code>, the
     same fold <code>--resume</code> spends. <code>per_turn_shed</code> is that
     same guarantee over a conversation a shed had already emptied: faithful to

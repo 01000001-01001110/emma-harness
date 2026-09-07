@@ -111,13 +111,12 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
   <span class="src">crates/emma/src/delegate.rs — resolve_tools, quoted entire</span>
 
   <p>
-    Three behaviours, and each is a decision somebody could have made the other
-    way. <code>None</code> registers every candidate and reports nothing dropped.
+    <code>None</code> registers every candidate and reports nothing dropped.
     A present list is walked twice: once to collect the names that matched no
     candidate, once to register. The registration walk iterates
     <em>candidates</em> rather than the file's list, so the registry's order
     wins over the file's, because the tool schema rides in the cached prompt
-    prefix and the bytes must not depend on how somebody typed a list.
+    prefix and the bytes must not depend on the order you typed the list in.
   </p>
 
   <p>
@@ -139,7 +138,7 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
     function; <code>tools: []</code> and <code>tools: ""</code> do, and under
     Emma's own rules an empty allowlist means no tools at all. In Claude Code an
     absent <code>tools</code> means inherit everything, and a present-but-empty
-    one is the same statement written differently: nobody writes
+    one is the same statement written differently. You do not write
     <code>tools: []</code> meaning "this agent may do nothing". So all three
     collapse to <code>None</code>, and <code>None</code> is the caller's signal
     to inherit.
@@ -174,8 +173,8 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
 
   <p>
     What does not bound it: nothing in the file format makes the permissive
-    reading visible. A file with no <code>tools:</code> line looks like a file
-    nobody has configured, and it is a file that can write.
+    reading visible. A file with no <code>tools:</code> line looks like one you
+    have not configured yet. It is a file that can write.
   </p>
 
   <h2 id="new">Where the filter is applied</h2>
@@ -292,25 +291,22 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
   <span class="src">crates/emma/src/delegate.rs — Delegate::new, quoted entire</span>
 
   <p>
-    Unknown tool names are filtered rather than fatal, and that diverges from
+    Unknown tool names are filtered here and fatal in
     <code>Harness::select_tools</code>, which refuses to start over a name it
-    does not recognise. The difference is who wrote the list. A persona's list is
-    the operator's own boot-time choice. An agent library is ninety files
-    somebody accumulated for a different program: measured against a real one,
-    its files name <code>TodoWrite</code>, <code>Task</code>, <code>repl</code>,
-    <code>artifacts</code> and <code>brave_web_search</code>, none of which this
-    binary registers, and bailing would mean Emma does not start in that
-    directory at all.
+    does not recognise. The difference is who wrote the list. Your persona list
+    is your own boot-time choice, so a typo in it is worth refusing to start
+    over. Your agent library is ninety files you accumulated for a different
+    program, and Emma bailing on the first unknown name would mean it does not
+    start in that directory at all.
   </p>
   <span class="src">crates/emma/src/delegate.rs — Delegate::new; crates/harness/src/lib.rs — Harness::select_tools</span>
 
   <p>
     Two notes come out of the loop and both name the agent. The first says which
-    tools this build has no answer for and that the rest were kept; the second
-    says a type named nothing this build registers and is not offered at all.
-    They reach the operator through <code>emma config check</code> and the
-    startup banner, which is what stops a catalogue quietly shorter than the
-    directory.
+    tools this build has no answer for and that the rest were kept. The second
+    says a type named nothing this build registers, so it is not offered at all.
+    Both reach you through <code>emma config check</code> and the startup banner,
+    so your catalogue cannot go quietly shorter than your directory.
   </p>
 
   <h2 id="untested">Neither branch has a test</h2>

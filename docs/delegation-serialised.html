@@ -143,23 +143,19 @@
   <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, from the budget check to the opening note</span>
 
   <p>
-    What it protects is stdin. <code>Approvals::decide</code> calls
-    <code>term.prompt_header</code> and only then <code>ask</code>, so two
-    concurrent approvals interleave as A's header, B's header, A's question, B's
-    question. The screen then shows B's evidence above A's question, and one
-    <code>y</code> goes to whichever holds the mutex. That is the defect
-    <code>LineSource::drain</code> exists to prevent, arriving by another route,
-    and <code>drain</code> makes it worse rather than better: the second prompt
-    discards the line typed in answer to the first.
+    What it protects is stdin, by the call order in
+    <code>Approvals::decide</code> quoted above.
+    <code>LineSource::drain</code> exists to prevent that same defect arriving by
+    another route, and here it makes matters worse: the second prompt discards
+    the line typed in answer to the first.
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::decide; crates/emma/src/term/input.rs — LineSource::drain</span>
 
   <p>
-    The closest prior art resolved the same collision by refusing the feature.
-    goose will not run subagents at all unless approval is switched off, which is
-    the escape hatch Emma's design rules out: the gate is a consent interface,
-    and a mode that turns it off to make a feature work turns it off for
-    everything else in the same process.
+    goose, the closest prior art, resolved the same collision by refusing to run
+    subagents at all unless approval is switched off. Emma's design rules that
+    out: the gate is a consent interface, and a mode that turns it off to make
+    one feature work turns it off for everything else in the same process.
   </p>
   <span class="src">crates/emma/src/delegate.rs — module doc</span>
 
@@ -168,10 +164,8 @@
   <p>
     <code>run_goal</code> awaits its tool calls one at a time, so the parent
     cannot issue two delegations concurrently in the first place. The permit is
-    there so that a future parallelisation of that loop fails loudly rather than
-    quietly: with it, the second delegation waits; without it, the second
-    delegation and the first fight over one keyboard, and the symptom is a
-    misread approval prompt rather than a stack trace.
+    there so a future parallelisation of that loop fails loudly: without it the
+    symptom would be a misread approval prompt rather than a stack trace.
   </p>
   <span class="src">crates/emma/src/agent.rs — Agent::run_goal; crates/emma/src/delegate.rs — module doc</span>
 
@@ -209,14 +203,11 @@ async fn two_delegations_never_overlap() {
   <span class="src">crates/emma/tests/delegate.rs::two_delegations_never_overlap, the setup and its comment</span>
 
   <p>
-    The comment records a false receipt this test issued before it was fixed. An
-    earlier script had one tool call and then a text turn, so whichever nested
-    run reached the model second finished without ever entering the shared tool,
-    the peak counter stayed at 1, and the test passed with
-    <code>acquire()</code> removed. Two tool calls at the front of the script is
-    what makes the assertion mean anything. The current version is
-    mutation-checked in its doc comment: removing <code>let _permit =
-    self.permit.acquire().await</code> makes it fail.
+    The comment records a false receipt this test issued before it was fixed:
+    with one tool call and then a text turn, the second nested run never entered
+    the shared tool, the peak counter stayed at 1, and the test passed with
+    <code>acquire()</code> removed. The current version is mutation-checked in
+    its doc comment.
   </p>
   <span class="src">crates/emma/tests/delegate.rs::two_delegations_never_overlap — doc comment and inline comment</span>
 
@@ -237,8 +228,7 @@ async fn two_delegations_never_overlap() {
     <code>available</code> slice <code>main.rs</code> assembles
     <strong>before</strong> <code>Delegate</code> itself is constructed. A tool
     that does not exist yet cannot be in a list, so no child registry can contain
-    it. An inner model that asks for <code>Delegate</code> anyway gets the
-    ordinary <code>no_such_tool</code> observation and routes around it.
+    it.
   </p>
   <span class="src">crates/emma/src/main.rs — the construction order; crates/emma/src/delegate.rs — Delegate::new</span>
 

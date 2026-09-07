@@ -390,8 +390,11 @@ fn code_rows(text: &amp;str, width: usize, skin: &amp;Skin) -&gt; Vec&lt;Line&lt
     each span's style, so a wrap can happen between words without losing where a
     style boundary was. And <code>pending</code> holds the space
     <em>before</em> a word rather than after it, so a line break eats the space
-    rather than leaving a trailing one on the row above. A word longer than the
-    window has nowhere to go but across rows, and
+    rather than leaving a trailing one on the row above.
+  </p>
+
+  <p>
+    A word longer than the window has nowhere to go but across rows, and
     <em>&ldquo;a character boundary is the only honest place to put the
     break.&rdquo;</em>
     <span class="chip test">tested</span>:

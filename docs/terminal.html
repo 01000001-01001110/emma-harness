@@ -534,18 +534,30 @@
     be merged advertised six keys of which four did nothing, and nobody wrote
     those rows dishonestly: the panel was a hand-written list of
     <code>(key, description)</code> pairs and the bindings were an exhaustive
-    <code>match</code> in another file. The rule here is that the declaration is
-    the thing that draws. <code>Table::hints</code> is what the sidebar's quick
-    help renders, and it derives the printed label from the <code>Chord</code>
-    rather than taking a second string, so a panel cannot spell a key
-    differently from the key it means. Liveness is a test rather than a type,
-    because Rust cannot ask a <code>match</code> which arms it has:
+    <code>match</code> in another file.
+  </p>
+
+  <p>
+    The rule here is that the declaration is the thing that draws.
+    <code>Table::hints</code> is what the sidebar's quick help renders, and it
+    derives the printed label from the <code>Chord</code> rather than taking a
+    second string, so a panel cannot spell a key differently from the key it
+    means.
+  </p>
+
+  <p>
+    Liveness is a test rather than a type, because Rust cannot ask a
+    <code>match</code> which arms it has.
     <code>every_drawn_key_is_answered</code> drives each chord through the real
     decoders and fails on anything that comes back <code>Action::Ignore</code>.
-    The other direction is pinned too. <code>UNDRAWN</code> records keys that
+    The other direction is pinned too: <code>UNDRAWN</code> records keys that
     work and are not shown, with the reason, and two tests fail when a handled
     key appears in neither table or when an <code>UNDRAWN</code> row's key stops
-    working. <code>resolve</code> is a second statement of the reader loop's
+    working.
+  </p>
+
+  <p>
+    <code>resolve</code> is a second statement of the reader loop's
     precedence rather than the loop itself: it calls the same four decoders in
     the same order, so a change to what a key does is picked up and only a
     change to the order could drift.
@@ -580,16 +592,24 @@
     <code>crates/emma/src/term/settings.rs</code>, 3,748 lines, draws the
     settings screen: a title block with the version in the corner, numbered
     cards in a grid, each card a bordered box of <code>Label &hellip; value</code> rows
-    with the value right-aligned. Its own earlier policy is reversed in the
-    file, which is the part worth carrying. It used to render the mock's sample
-    value for a field with no backing state, so <code>Max Context Tokens
-    8192</code> was painted identically to a live <code>Model</code>. Every row
-    now ends in one of three visually distinct states: live and editable, live
-    and read-only with a notice naming where it is changed, or absent, drawn dim
-    and reading <code>n/a</code> or <code>not set</code> rather than a plausible
+    with the value right-aligned.
+  </p>
+
+  <p>
+    Its own earlier policy is reversed in the file, and that is the part worth
+    carrying. It used to render the mock's sample value for a field with no
+    backing state, so <code>Max Context Tokens 8192</code> was painted
+    identically to a live <code>Model</code>. Every row now ends in one of three
+    visually distinct states: live and editable, live and read-only with a
+    notice naming where it is changed, or absent, drawn dim and reading
+    <code>n/a</code> or <code>not set</code> rather than a plausible
     placeholder. The dim-against-accent split carries that, because colour is
-    the only channel a <code>Label &hellip; value</code> row has left for a reader who
-    presses nothing. Interaction is two pure halves: <code>handle_key</code>
+    the only channel a <code>Label &hellip; value</code> row has left for you if
+    you press nothing.
+  </p>
+
+  <p>
+    Interaction is two pure halves: <code>handle_key</code>
     mutates focus and returns a <code>SettingsAction</code> for anything needing
     disk or network, and the mouse path records every control's rect from the
     same arithmetic that painted it, then dispatches a click through the same
@@ -607,16 +627,28 @@
     header strip, and cards for step timeline, run metadata, tool calls,
     artifacts and event log. Rungraph is a box-drawn execution DAG on the left,
     a selected-node inspector on the right, a five-panel strip beneath, and a
-    command bar. Both share one divergence from their mocks, and it is the data:
+    command bar.
+  </p>
+
+  <p>
+    Both share one divergence from their mocks, and it is the data:
     the harness they describe does not exist yet, so both render from a view
     type. A populated view reproduces the mock and the live view starts with no
-    run. <code>inspect.rs</code> with <code>run: None</code> draws the head and
+    run.
+  </p>
+
+  <p>
+    <code>inspect.rs</code> with <code>run: None</code> draws the head and
     one dim line and withholds the input bar, because every cell on the page
     describes one run and empty chrome would claim a run exists.
     <code>rungraph.rs</code> keeps the chrome, says there is no run graph in the
-    canvas, and shows real zeros and dashes where a value would be a claim; its
+    canvas, and shows real zeros and dashes where a value would be a claim. Its
     legend still renders in full because it explains vocabulary rather than
-    claiming state. Rungraph owns its own layout: layered top-down with a node's
+    claiming state.
+  </p>
+
+  <p>
+    Rungraph owns its own layout: layered top-down with a node's
     layer one past its deepest parent, uniform boxes, siblings centred per
     layer, three gap rows between layers for the dashed edges, and no force
     direction. Both are pure rendering. Keys and mounting belong to the shell.
@@ -630,11 +662,15 @@
     <code>crates/emma/src/term/welcome.rs</code> is 211 lines and is the one
     module here with nothing aspirational in it. Emma had no first run at all: a
     new user saw a warning, two paths and an empty box, with nothing naming the
-    tools that had just been loaded on their behalf. Everything on the block is
-    read from the run that is starting, the harness that loaded, the tools that
-    survived selection, the commands that exist in this project, because a
-    welcome listing capabilities the run does not have teaches first that Emma's
-    account of itself cannot be trusted. It is shown once, and which of the two
+    tools that had just been loaded on their behalf.
+  </p>
+
+  <p>
+    Everything on the block is
+    read from the run that is starting: the harness that loaded, the tools that
+    survived selection, the commands that exist in this project. A
+    welcome listing capabilities the run does not have teaches you first that
+    Emma's account of itself cannot be trusted. It is shown once, and which of the two
     detection reasons was used is printed on the block, since a returning user's
     first question is why they are seeing it.
     <span class="chip cert">certified</span>: <code>Welcome</code> has a

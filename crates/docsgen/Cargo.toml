@@ -33,3 +33,10 @@ emma-tools-fs.workspace = true
 emma-tools-tasks.workspace = true
 emma-tools-screenshot.workspace = true
 emma-tools-lsp.workspace = true
+# `syn` alone can say a function exists; it cannot say which lines of the file
+# it occupies, and a quoted block has to come out of the file byte for byte.
+# `span-locations` is what turns a parsed item back into a line range. It is a
+# non-default feature, so it is named here rather than inherited: enabling it
+# costs proc-macro2 a line-offset table it otherwise skips, workspace-wide via
+# feature unification, which is the price of not writing a second brace-matcher.
+proc-macro2 = { version = "1", features = ["span-locations"] }

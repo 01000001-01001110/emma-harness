@@ -256,10 +256,10 @@
 
 <p>
   The order matters in two places. <code>validate_args</code> runs before the
-  approval prompt, so a malformed call never spends a human's attention. The
+  approval prompt, so a malformed call never spends your attention. The
   <code>PreToolUse</code> hook runs before it too, because a policy denial is
-  not something the person at the keyboard gets a vote on, and a gate a human
-  can wave through is advice.
+  not something you get a vote on at the keyboard, and a gate you can wave
+  through is advice.
 </p>
 <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code></span>
 
@@ -329,9 +329,9 @@
 </p>
 
 <p>
-  What the field is still not, said plainly in its own doc: a replay mechanism.
-  Emma has no crash-recovery fold and nothing consults this to decide whether
-  to re-run a call.
+  Its own doc names what the field is still not: a replay mechanism. Emma has
+  no crash-recovery fold, and nothing consults this to decide whether to re-run
+  a call.
 </p>
 
 <h3>The coherence check</h3>
@@ -487,8 +487,8 @@
     }</code></pre>
 
 <p>
-  <code>detail</code> is one line naming the errand, and it is what the human
-  reads under the host. <code>WebSearch</code> puts the query there verbatim,
+  <code>detail</code> is one line naming the errand, and it is what you read
+  under the host. <code>WebSearch</code> puts the query there verbatim,
   <code>BrowserFill</code> puts every field and value. A prompt that names a
   host and not what is being sent there is a prompt nobody can evaluate.
 </p>

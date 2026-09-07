@@ -259,9 +259,19 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     Memory page carries <code>NO_INDEX</code> on painted cells, and
     <code>memory_draws_one_input_box_and_says_what_it_cannot_do</code> asserts
     the search key's honesty notice. The test names on this page when it was
-    written (<code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>,
-    <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>)
-    no longer exist. The Data Explorer page was removed 2026-08-27.
+    written (<em>the_memory_page_says_it_has_no_index_rather_than_inventing_one</em>,
+    <em>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</em>) no
+    longer exist, and are set in italics rather than as citations so that
+    neither a reader nor the citation checker goes looking for them. The Data
+    Explorer page was removed 2026-08-27. The guarantee behind the first of
+    them (a page that cannot read its store says so, and says which store)
+    survived the removal and is now
+    <code>an_unreadable_store_says_so_and_says_which_store</code>, which renders
+    the Memory page over a path that is a file rather than a directory and
+    asserts the failure notice names <code>.emma/memory</code>. Its own doc
+    records the gap it leaves: only the memory arm is driven, because the
+    harness feed reads a private field no seam outside <code>app.rs</code> can
+    aim at a test-controlled path.
   </p>
 
   <p>
@@ -746,7 +756,7 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     because colouring by a stale position is how highlighting ends up half a line
     out, and tokens belonging to another file are never painted over this one.
     <span class="chip test">tested</span>:
-    <code>a_comment_and_the_code_beside_it_are_not_the_same_colour</code> asserts
+    <code>a_comment_and_the_code_beside_it_are_painted_differently</code> asserts
     the painted cells differ, which is the only claim that matters, and
     <code>tokens_for_another_file_are_not_painted_over_this_one</code> covers an
     answer that arrives about a different file.

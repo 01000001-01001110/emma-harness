@@ -101,8 +101,8 @@
 
   <p>
     What replaced it keeps the visibility the argument was about. A rule is
-    written only when the user picks the answer that says so, it is shown before
-    it is written, it lands in a JSON file that can be read, diffed and deleted,
+    written only when you pick the answer that says so, and it is shown to you
+    before it is written. It lands in a JSON file you can read, diff and delete,
     and <code>emma config check</code> lists every rule with the file it came
     from.
   </p>
@@ -132,11 +132,10 @@
   <span class="src">crates/emma/src/permissions.rs — Rule::parse, Spec, check_tool; tests::the_shapes_a_rule_can_have</span>
 
   <p>
-    The consequence of that last row is worth spelling out, because something
-    now depends on it: <strong>&ldquo;deny everything&rdquo; has to be written
-    out, one tool at a time.</strong> There is no rule that denies every tool,
+    That last row has a consequence: <strong>&ldquo;deny everything&rdquo; has to
+    be written out, one tool at a time.</strong> There is no rule that denies every tool,
     so a preset meaning that has to name all of them, and a list that silently
-    missed one would be a protection somebody believed they had. Emma's own
+    missed one would be a protection you believed you had. Emma's own
     <code>Deny All</code> preset carries a list of 26 tool names for exactly
     this reason, and it is kept in step with what the binary registers by a test
     rather than by memory. That list was wrong on arrival, missing the two
@@ -275,9 +274,9 @@
   <p>
     <code>check_tool</code> refuses three things in the tool position: an empty
     name, a name containing <code>*</code>, and a name containing whitespace. The
-    error for the star says why, and it is the sharpest sentence in the file: a
-    <code>*</code> there is the rule that matches everything, which in the
-    <code>allow</code> list is one typo away from approving the whole tool surface.
+    error for the star says why. A <code>*</code> there is the rule that matches
+    everything, and in the <code>allow</code> list that is one typo away from
+    approving the whole tool surface.
     <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_glob_in_the_tool_position_is_refused</code> runs <code>*</code>,
     <code>*(domain:x)</code>, <code>Web*</code> and <code>mcp__*</code> and
@@ -286,10 +285,10 @@
   <span class="src">crates/emma/src/permissions.rs — check_tool; tests::a_glob_in_the_tool_position_is_refused</span>
 
   <p>
-    Anything that is not a clean parse is an error rather than a rule that matches
-    nothing. The distinction is about the <code>deny</code> list: a rule the
-    operator wrote and Emma dropped without a word is a protection they believe
-    they have. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    Anything that is not a clean parse is an error, never a rule that matches
+    nothing. The distinction is about the <code>deny</code> list: a rule you
+    wrote and Emma dropped without a word is a protection you believe you have.
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_malformed_rule_is_refused_rather_than_silently_inert</code> asserts an
     error for ten spellings, including <code>""</code>, <code>"   "</code>,
     <code>WebFetch(</code>, <code>WebFetch(domain:apnews.com</code>,
@@ -421,7 +420,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     the kind this workspace rules against elsewhere. The notes are what
     compensates, and <code>main</code> prints every one through the
     <em>warning</em> channel at startup rather than the note channel, since each
-    is a line somebody wrote that is not doing what they think.
+    is a line you wrote that is not doing what you think.
     <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_bad_rule_costs_that_rule_and_not_the_boot</code> parses
     <code>WebFetch(</code> beside <code>WebSearch</code> and asserts the good rule
@@ -431,7 +430,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
 
   <p>
     The unsupported branch writes two different sentences, and the split is the
-    point. An <code>allow</code> Emma cannot evaluate costs a prompt the user did
+    point. An <code>allow</code> Emma cannot evaluate costs a prompt you did
     not want. A <code>deny</code> or <code>ask</code> it cannot evaluate costs
     them a protection they think they have, and that one says <em>blocks
     NOTHING</em> in capitals and suggests the bare tool name as the spelling that
@@ -540,7 +539,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     where it saves permanent approvals, so writing into <code>settings.json</code>
     would commit one developer's convenience as everybody's policy on the next
     <code>git add</code>. A project that has <code>.emma/</code> should not acquire
-    a <code>.claude/</code> directory because somebody answered a prompt, which
+    a <code>.claude/</code> directory because you answered a prompt, which
     would be Emma creating configuration for a different program without being
     asked. And a grant made in one repository is not a grant everywhere.
   </p>
@@ -601,8 +600,8 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     Both matchers read <em>argument text</em>. <code>Bash</code> hands that text
     to a shell, and the fs tools resolve their path long after the gate has
-    decided. A rule can therefore be evaded by writing the same thing differently,
-    and that is a property of the shape rather than a bug in it.
+    decided. So a rule can be evaded by writing the same thing differently. That
+    is a property of the shape, not a bug in it.
   </p>
 
   <p>
@@ -664,10 +663,9 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>setsid</code>, <code>stdbuf</code>, <code>ionice</code> and
     <code>busybox</code>. The cost is a question on a command containing a
     bracket for some other reason, and only where a <code>deny</code> prefix rule
-    for that tool already exists. This is the trade the paragraph above
-    states. The test's control asserts three plain commands stay unprompted under a
-    live deny rule, because a prompt that fires when it should not is how an
-    operator learns to answer without reading.
+    for that tool already exists. The test's control asserts three plain commands
+    stay unprompted under a live deny rule, because a prompt that fires when it
+    should not is how you learn to answer without reading.
   </p>
 
   <p>
@@ -694,7 +692,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     <strong>The path half.</strong> <code>./src/x</code> and <code>src/x</code> are
     one file to the tool and were two strings to the matcher, so a deny protected
-    only the spelling the operator happened to use. Both the rule pattern and the
+    only the spelling you happened to use. Both the rule pattern and the
     call's path are now normalised before matching: separators become
     <code>/</code>, repeated separators collapse, and <code>./</code> segments go.
     The rule and the call then meet in one spelling.
@@ -742,20 +740,17 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
 
   <p>
     <strong>The tool decides, not the punctuation.</strong> Only <code>Bash</code>
-    runs a command, so only <code>Bash(...)</code> is a prefix; every other tool
+    runs a command, so only <code>Bash(...)</code> is a prefix. Every other tool
     addresses a path, so its specifier is a glob. The first version asked whether
-    the text contained a separator or a glob character instead, which made
-    <code>Read(Cargo.toml)</code> a <em>command</em> prefix, matched against a
-    <code>command</code> argument that a <code>Read</code> call does not have. It
-    matched nothing at all, silently, on a rule naming one file by name.
+    the text contained a separator or a glob character, which is how
+    <code>Read(Cargo.toml)</code> became a command prefix that matched nothing.
   </p>
 
   <p>
     That was one of seven bypasses a cross-model review returned against the
     first version of the path matcher, all seven with exact inputs. Five were
-    holes; <strong>two were the opposite: a rule answering where it should
-    have stayed quiet</strong>. A gate that asks about everything is a gate nobody
-    reads.
+    holes. <strong>Two were the opposite: a rule answering where it should have
+    stayed quiet.</strong>
   </p>
 
   <div class="tw">
@@ -804,22 +799,16 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <p>
       The <code>Rule::parse</code> block above read
       <code>if tool != "Bash" || inner.contains('/') || &hellip;</code> until
-      2026-08-23. That disjunct was the fix for the <em>previous</em> defect:
-      shape chosen by punctuation, which made <code>Read(Cargo.toml)</code> a
-      command prefix that matched nothing. It rebuilt the identical defect
-      facing the other way: every <code>Bash</code> rule containing a separator
-      compiled to a path glob, and a <code>Bash</code> call carries
-      <code>command</code> rather than <code>file_path</code>, so the rule could
-      never fire. <strong>Measured on the owner's real
+      2026-08-23. That disjunct is the defect the quoted comment describes:
+      every <code>Bash</code> rule containing a separator compiled to a path
+      glob and could never fire. <strong>Measured on the owner's real
       <code>settings.json</code>: 24 of 53 <code>Bash</code> rules silently
-      inert</strong>, deny rules among them, and worse than the state it
-      replaced because <code>Spec::Unsupported</code> is announced at boot and
-      <code>Spec::Path</code> is not.
+      inert</strong>, deny rules among them.
     </p>
     <p>
       Two independent reviewers found the code defect on the same afternoon; a
       third found that this page was still quoting the broken condition
-      <em>after</em> the code was fixed, on the page a reader consults about
+      <em>after</em> the code was fixed, on the page you consult about
       security, with nothing marking it as historical. Both halves are the same
       lesson: a row is not done when its code lands, and a page that quotes code
       is a claim about the code that has to be re-checked when the code moves.
