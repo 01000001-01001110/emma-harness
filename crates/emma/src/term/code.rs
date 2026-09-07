@@ -1248,6 +1248,18 @@ pub struct Candidate {
     pub detail: Option<String>,
 }
 
+impl Diag {
+    /// Whether this diagnostic touches a line at all.
+    ///
+    /// The gutter mark asked this one way round and the underline asked it the
+    /// other, De Morgan'd, in two different functions. One rule, and the next
+    /// person to change what a multi-line span means has one place to change
+    /// it.
+    pub fn spans_line(&self, line: usize) -> bool {
+        line >= self.line && line <= self.end_line
+    }
+}
+
 /// The completion popup: what came back, what has been typed since, and which
 /// row is chosen.
 ///
@@ -1260,8 +1272,17 @@ pub struct Candidate {
 pub struct Popup {
     /// Everything the server offered, in the server's own ranking.
     pub items: Vec<Candidate>,
-    /// What has been typed since the popup opened, appended to the word that
-    /// was already under the cursor.
+    /// What has been typed since the request went out, and **only** that.
+    ///
+    /// It is empty at the moment an answer lands, so the list is first drawn
+    /// unnarrowed. That is right for a server which filters by the prefix
+    /// itself — rust-analyzer does — and wrong for one that returns the whole
+    /// set in scope, which would then be shown in full until the next
+    /// keystroke. Seeding this with the identifier before the cursor would fix
+    /// that case; it is not done here, because the fix cannot be certified
+    /// against a server nobody on this project has run, and a wrongly seeded
+    /// filter hides candidates with no visible way to reach them. The doc used
+    /// to claim the seeding was already happening.
     pub typed: String,
     /// The chosen row, as an index into [`Self::visible`].
     pub at: usize,
@@ -1335,8 +1356,12 @@ impl Popup {
 /// fix the next time the opening rule changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    /// What the row says: the line's own text for a reference, the symbol's
-    /// name and kind for a symbol.
+    /// What the row says, and it is **not** the line's own text: a reference
+    /// answer names files the page has not read, so
+    /// `code_lsp::reference_places` writes `path:line`, and `symbol_places`
+    /// writes the symbol's name indented by its nesting. Neither shows a kind.
+    /// This doc claimed both for a while, which is the sort of thing a reader
+    /// only finds out by opening the producers — so the producers are named.
     pub label: String,
     /// Repo-relative. A place outside the root is not offered at all, which is
     /// the containment rule the definition jump already follows.
@@ -1544,7 +1569,7 @@ impl Lsp {
     pub fn at_line(&self, line: usize) -> Option<&Diag> {
         self.diags
             .iter()
-            .filter(|d| line >= d.line && line <= d.end_line)
+            .filter(|d| d.spans_line(line))
             .min_by_key(|d| d.severity)
     }
 }
@@ -1941,22 +1966,39 @@ pub fn takes_key(v: &CodeView, key: KeyEvent) -> bool {
 
 /// One key, against the whole page.
 ///
-/// Five layers, in this order, because each can only be reached by getting
-/// past the one above it:
+/// The layers, in this order, because each can only be reached by getting past
+/// the one above it. **The list is unnumbered on purpose**: it used to say
+/// "five layers" over six of them, and by the time the overlays were added it
+/// was a count nobody had recounted.
 ///
-/// 1. **[`takes_key`]** — releases and Alt are never ours, and neither is Ctrl
-///    but for the save chord.
-/// 2. **The save chord**, above the warning below it, because saving is the
-///    way *out* of an unsaved-changes warning and must not be the key that
-///    cancels one.
-/// 3. **An armed warning**, which consumes the key that answers it.
-/// 4. **The function keys**, which work from anywhere on the page — including
-///    from inside the document, where every letter is text. That is the whole
-///    reason they are function keys.
-/// 5. **The chat strip**, when it has the keyboard — and only then, which is
-///    the whole of "the strip must not eat a key the editor needs": the strip
-///    is one branch of one layer, not a rule beside the layers.
-/// 6. The editor, when the document is being edited, or the browser otherwise.
+/// - **[`takes_key`]** — releases and Alt are never ours, and neither is Ctrl
+///   but for the save chord.
+/// - **The save chord**, above the warning below it, because saving is the way
+///   *out* of an unsaved-changes warning and must not be the key that cancels
+///   one.
+/// - **An armed warning**, which consumes the key that answers it. **Above the
+///   overlays, and that is a fix rather than a preference.** A places answer
+///   can land while a warning is armed — press `F8` on an edited buffer, then
+///   `Esc` — and with the panel above the warning the panel ate the key that
+///   would have cancelled it, leaving the warning armed with its notice on
+///   screen so the *next* matching key confirmed a discard. A destructive
+///   action must never be reachable by a key somebody thought was closing a
+///   list.
+/// - **The overlays**, places before hover. Each takes every key that reaches
+///   it, the accent picker's rule: it covers the text, and a key that fell
+///   through to the editor while a panel hid the line would edit a line the
+///   person cannot see. **Places first, because that is what the paint draws.**
+///   Both can be set at once — `F8` then `F5` before the references answer
+///   lands — and `draw_body` resolves that in favour of the panel, so the
+///   keyboard has to resolve it the same way. It did not, and the first key
+///   after that pair silently closed an invisible hover.
+/// - **The function keys**, which work from anywhere on the page — including
+///   from inside the document, where every letter is text. That is the whole
+///   reason they are function keys.
+/// - **The chat strip**, when it has the keyboard — and only then, which is
+///   the whole of "the strip must not eat a key the editor needs": the strip
+///   is one branch of one layer, not a rule beside the layers.
+/// - The editor, when the document is being edited, or the browser otherwise.
 pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if !takes_key(v, key) {
         return CodeAction::None;
@@ -1973,20 +2015,9 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if key.code == KeyCode::F(2) {
         return v.request_save();
     }
-    // The hover popup takes every key that reaches it, the accent picker's
-    // rule: it covers the text, and a key that fell through to the editor
-    // while a panel hid the line would edit a line the person cannot see. It
-    // sits below the save chord deliberately, so `Ctrl+s` and `F2` still save
-    // with a popup open.
-    if v.lsp.hover.is_some() {
-        return hover_key(v, key);
-    }
-    // The places panel, for the same reason and one more: unlike the
-    // completion popup it is a *destination*, so Enter belongs to it rather
-    // than to the buffer underneath.
-    if v.lsp.places.is_some() {
-        return places_key(v, key);
-    }
+    // Above the overlays: a panel that ate the answer to this would leave the
+    // warning armed and its notice on screen, and the next matching key would
+    // confirm a discard nobody had just asked for. See the layer list above.
     if let Some(pending) = v.armed.take() {
         v.notice = None;
         // The same key again confirms; anything else cancels and is **not**
@@ -1996,6 +2027,19 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         } else {
             CodeAction::FocusChanged
         };
+    }
+    // The places panel first, because `draw_body` draws it over the hover: the
+    // two can both be set, and whichever is on screen is the one that owns the
+    // arrows. Unlike the completion popup it is a *destination*, so Enter
+    // belongs to it rather than to the buffer underneath.
+    if v.lsp.places.is_some() {
+        return places_key(v, key);
+    }
+    // The hover popup takes every key that reaches it, for the same reason. It
+    // sits below the save chord deliberately, so `Ctrl+s` and `F2` still save
+    // with a popup open.
+    if v.lsp.hover.is_some() {
+        return hover_key(v, key);
     }
     match key.code {
         KeyCode::F(3) => return v.toggle_mode(),
@@ -3897,7 +3941,7 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
 /// expected here" - still marks one cell, because a decoration nobody can see
 /// is the same as no decoration.
 fn covers(d: &Diag, line: usize, col: usize) -> bool {
-    if line < d.line || line > d.end_line {
+    if !d.spans_line(line) {
         return false;
     }
     let start = if line == d.line { d.start_col } else { 0 };
@@ -3907,6 +3951,36 @@ fn covers(d: &Diag, line: usize, col: usize) -> bool {
         usize::MAX
     };
     col >= start && col < end
+}
+
+/// Clear a rectangle, draw the border round it, and hand back the inside.
+///
+/// **The clearing is the part worth a function.** Every floating thing on this
+/// page — the hover, the completion list, the places panel — is drawn last, on
+/// top of a document that has already been painted, and a border laid over live
+/// text with the text still showing through reads as corruption rather than as
+/// an overlay. The rule was written out three times and the argument for it
+/// once, so two of the three could have lost it without anybody noticing.
+///
+/// The order matters and is the reason this is not two calls: the fill covers
+/// only the inside, so it must happen before `render` puts the border on the
+/// cells around it — filling afterwards would erase the border's own row.
+fn overlay(buf: &mut Buffer, rect: Rect, skin: &Skin) -> Rect {
+    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
+    let inner = block.inner(rect);
+    for y in inner.y..inner.bottom() {
+        put(
+            buf,
+            Rect::new(inner.x, y, inner.width, 1),
+            0,
+            Line::from(Span::styled(
+                " ".repeat(inner.width as usize),
+                skin.palette.style(Role::Text),
+            )),
+        );
+    }
+    block.render(rect, buf);
+    inner
 }
 
 /// The hover popup, over the document.
@@ -3931,23 +4005,7 @@ fn draw_hover(area: Rect, buf: &mut Buffer, popup: &HoverPopup, skin: &Skin) -> 
         return Rect::new(area.x, area.y, 0, 0);
     }
     let rect = Rect::new(area.x, area.y, want_w.min(area.width), want_h);
-    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
-    let inner = block.inner(rect);
-    // The cells under the popup are overwritten rather than blended: a border
-    // drawn over live text with the text still showing through reads as
-    // corruption rather than as an overlay.
-    for y in inner.y..inner.bottom() {
-        put(
-            buf,
-            Rect::new(inner.x, y, inner.width, 1),
-            0,
-            Line::from(Span::styled(
-                " ".repeat(inner.width as usize),
-                skin.palette.style(Role::Text),
-            )),
-        );
-    }
-    block.render(rect, buf);
+    let inner = overlay(buf, rect, skin);
     for (row, line) in popup
         .lines
         .iter()
@@ -4029,20 +4087,7 @@ fn draw_popup(area: Rect, buf: &mut Buffer, v: &CodeView, popup: &Popup, skin: &
     let x = area.x.min(area.right().saturating_sub(width));
     let rect = Rect::new(x, y, width.min(area.width), want_h);
 
-    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
-    let inner = block.inner(rect);
-    for row in inner.y..inner.bottom() {
-        put(
-            buf,
-            Rect::new(inner.x, row, inner.width, 1),
-            0,
-            Line::from(Span::styled(
-                " ".repeat(inner.width as usize),
-                skin.palette.style(Role::Text),
-            )),
-        );
-    }
-    block.render(rect, buf);
+    let inner = overlay(buf, rect, skin);
 
     // Keep the chosen row on screen when the list is longer than the box.
     let at = popup.at.min(visible.len().saturating_sub(1));
@@ -4117,20 +4162,7 @@ fn draw_places(area: Rect, buf: &mut Buffer, places: &Places, skin: &Skin) {
         rows as u16 + 3,
     );
 
-    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
-    let inner = block.inner(rect);
-    for row in inner.y..inner.bottom() {
-        put(
-            buf,
-            Rect::new(inner.x, row, inner.width, 1),
-            0,
-            Line::from(Span::styled(
-                " ".repeat(inner.width as usize),
-                skin.palette.style(Role::Text),
-            )),
-        );
-    }
-    block.render(rect, buf);
+    let inner = overlay(buf, rect, skin);
 
     let w = inner.width as usize;
     // The header says what was asked and how many answers came back, because a
@@ -6556,6 +6588,10 @@ mod tests {
         let skin = skin();
         let keyword = cell("l");
         let comment = cell("/");
+        // A cell no token covers. The second copy of this test, deleted with
+        // this line moved into it, checked only that the three differ; this one
+        // checks the roles as well, so it subsumes it.
+        let plain = cell("x");
         assert_eq!(
             keyword.style().fg,
             skin.palette.style(Role::Keyword).fg,
@@ -6571,6 +6607,12 @@ mod tests {
             comment.style().fg,
             "a comment the same colour as the code is the defect this fixes"
         );
+        assert_ne!(
+            keyword.style().fg,
+            plain.style().fg,
+            "a character no token covers must not take the keyword's colour"
+        );
+        assert_ne!(comment.style().fg, plain.style().fg, "nor the comment's");
         assert!(
             comment
                 .style()
@@ -6693,6 +6735,170 @@ mod tests {
             before,
             "the key did not reach the buffer"
         );
+    }
+
+    /// **The paint and the keyboard agree about which overlay is on top.**
+    ///
+    /// Both can be set: press `F8`, then `F5` before the references answer
+    /// lands. `draw_body` draws the panel and not the hover, and `handle_key`
+    /// used to ask the hover first — so the arrows moved nothing, and the first
+    /// key silently closed a popup that was never on screen. This asserts the
+    /// two orders from the same state, so it fails whichever of them is
+    /// reversed.
+    #[test]
+    fn the_overlay_that_is_drawn_is_the_one_that_takes_the_keys() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![
+            ("src/main.rs", 0, 3),
+            ("src/term/code.rs", 41, 8),
+        ]));
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: Some(vec!["fn main()".into()]),
+        });
+        assert!(
+            v.lsp.places.is_some() && v.lsp.hover.is_some(),
+            "both are up"
+        );
+
+        // What the paint chose.
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        assert!(
+            rows.iter().any(|r| r.contains("references to widget (2)")),
+            "the panel is the overlay on screen: {rows:#?}"
+        );
+
+        // What the keyboard chose. Down moves the panel's selection; if the
+        // hover had taken the key the panel would be untouched and the hover
+        // scrolled or closed instead.
+        handle_key(&mut v, key(KeyCode::Down));
+        assert_eq!(
+            v.lsp.places.as_ref().map(|p| p.at),
+            Some(1),
+            "the arrow reached the panel that is on screen"
+        );
+        assert!(
+            v.lsp.hover.is_some(),
+            "and did not close the overlay nobody can see"
+        );
+    }
+
+    /// **An armed discard is answered before any overlay sees the key.**
+    ///
+    /// A places answer can land in the gap between arming the warning and the
+    /// key that answers it. With the panel above the warning, the panel ate the
+    /// cancelling key, the warning stayed armed with its notice on screen, and
+    /// the *next* `Esc` closed the page and threw the edits away — a
+    /// destructive action reached by a key somebody thought was closing a list.
+    #[test]
+    fn a_panel_cannot_swallow_the_key_that_cancels_a_discard() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        handle_key(&mut v, key(KeyCode::Char('x')));
+        assert!(v.dirty(), "there are edits to lose");
+        handle_key(&mut v, key(KeyCode::Esc));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Esc)),
+            CodeAction::FocusChanged,
+            "the second Esc arms the warning rather than closing the page"
+        );
+        assert!(v.armed.is_some(), "armed");
+
+        // The answer arrives while the warning waits.
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Char('q'))),
+            CodeAction::FocusChanged
+        );
+        assert!(
+            v.armed.is_none(),
+            "the warning was answered rather than left armed behind a panel"
+        );
+
+        // And so the panel's own Esc closes the panel, not the page.
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Esc)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.lsp.places.is_none(), "the panel closed");
+        assert!(v.dirty(), "and nothing was discarded");
+    }
+
+    /// The overlay's fill, which is the half of it that has no other witness.
+    ///
+    /// A border rendered over a painted document without clearing the cells
+    /// inside it leaves the file showing through the panel, which reads as
+    /// corruption rather than as an overlay. Three draw functions shared this
+    /// preamble and only one carried the argument for it.
+    #[test]
+    fn an_overlay_clears_the_document_out_from_under_itself() {
+        let mut v = sample();
+        // Several lines of one distinctive glyph, each wider than the pane: the
+        // panel's own rows must land over painted text, or the fill has nothing
+        // to clear and the test cannot fail.
+        let long = "Z".repeat(120);
+        let lines: Vec<&str> = (0..8).map(|_| long.as_str()).collect();
+        open_file(&mut v, "src/main.rs", &lines);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        let panel = rows
+            .iter()
+            .find(|r| r.contains("references to widget"))
+            .expect("the panel header is drawn");
+        // Everything from the header text to the panel's right border. The
+        // document's `Z`s are to the *left* of the panel too, which is correct
+        // and is why this looks only inside it -- and the border itself is the
+        // last glyph on the row, which is why the first version of this test
+        // asked whether the row ended in a `Z` and could not fail.
+        let inside = &panel[panel.find("references").expect("the header")..];
+        assert!(
+            !inside.contains('Z'),
+            "the document is showing through the panel: {inside:?}"
+        );
+    }
+
+    /// A span that runs over several lines marks every one of them.
+    ///
+    /// Every diagnostic fixture on this page was one line high, so the
+    /// containment rule the gutter and the underline share could have been
+    /// `line == d.line` and nothing would have gone red. rust-analyzer spans
+    /// several lines routinely — an unclosed brace, a mismatched block.
+    #[test]
+    fn a_diagnostic_that_spans_lines_marks_every_line_it_covers() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {", "    x", "}"]);
+        v.body_rows = 10;
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![Diag {
+                line: 0,
+                end_line: 2,
+                start_col: 10,
+                end_col: 1,
+                severity: Severity::Error,
+                message: "this block is never closed".into(),
+            }],
+        );
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        for line in 0..3 {
+            assert_eq!(
+                gutter_mark(&buf, &v, area, line),
+                Severity::Error.mark().to_string(),
+                "line {line} of a three-line span is unmarked"
+            );
+        }
+        // And the underline reaches the middle line, which has no endpoint of
+        // its own: the span covers it whole.
+        assert!(covers(&v.lsp.diags[0], 1, 0), "the middle line is covered");
     }
 
     /// Drawn: the header says what was asked and how many came back, and the
@@ -7370,53 +7576,6 @@ mod tests {
     }
 
     // -- syntax colour -------------------------------------------------------
-
-    /// **The complaint this feature answers, as a test.** Every character of
-    /// every file was `Role::Text`, so a comment and the code it explains were
-    /// the same colour. This asserts the painted cells actually differ, which
-    /// is the only claim that matters: a token list nobody paints is a token
-    /// list nobody can see.
-    #[test]
-    fn a_comment_and_the_code_beside_it_are_not_the_same_colour() {
-        use emma_tools_lsp::render::{Token, TokenKind};
-        let mut v = sample();
-        v.body_rows = 10;
-        open_file(&mut v, "src/lib.rs", &["let x = 1; // why"]);
-        v.apply_lsp(LspUpdate::Tokens {
-            path: "src/lib.rs".to_string(),
-            items: vec![
-                Token {
-                    line: 0,
-                    start: 0,
-                    end: 3,
-                    kind: TokenKind::Keyword,
-                },
-                Token {
-                    line: 0,
-                    start: 11,
-                    end: 17,
-                    kind: TokenKind::Comment,
-                },
-            ],
-        });
-        let area = Rect::new(0, 0, 80, 12);
-        let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v, &skin());
-        let g = doc_geom(area, &v).expect("the document was drawn");
-        let cell = |col: usize| {
-            let x = g.area.x + g.gutter + col as u16;
-            buf[(x, g.area.y)].style().fg
-        };
-        let keyword = cell(0);
-        let plain = cell(4);
-        let comment = cell(11);
-        assert_ne!(
-            comment, plain,
-            "the comment is the same colour as the code beside it"
-        );
-        assert_ne!(keyword, plain, "the keyword is not coloured");
-        assert_ne!(keyword, comment, "keyword and comment share a colour");
-    }
 
     /// Tokens about another file are not painted over this one. A stale set is
     /// dropped rather than drawn, which is the same rule the diagnostics follow.

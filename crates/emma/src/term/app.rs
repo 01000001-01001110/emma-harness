@@ -1736,10 +1736,15 @@ impl App {
 
     // region: The language-server bridge
     // -----------------------------------------------------------------------
-    // Six small methods, and not one of them waits for anything. Each ends in a
-    // `code_lsp::Handle::post`, which is a `try_send` on a bounded channel: a
-    // full queue or a dead task drops the request and the page simply lacks
+    // Not one of these waits for anything. The ones that talk to the bridge end
+    // in a `code_lsp::Handle::post`, which is a `try_send` on a bounded channel:
+    // a full queue or a dead task drops the request and the page simply lacks
     // decorations. See `super::code_lsp` for the law this obeys and why.
+    //
+    // The comment here used to say "six small methods, each ends in a post",
+    // and by the time anybody read it there were eleven and three of them
+    // posted nothing. A count in a comment is a claim that goes stale the next
+    // time somebody adds a key, so this one no longer makes it.
     // -----------------------------------------------------------------------
 
     /// Wire the page to a bridge. Called once, from `main`.
@@ -1752,31 +1757,19 @@ impl App {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self
-            .code
-            .as_ref()
-            .and_then(|v| v.open.as_ref())
-            .filter(|o| o.note.is_none())
-        else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             self.code_sent = None;
             return;
         };
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
-        self.code_sent = Some((
-            open.path.clone(),
-            super::code_git::hash_bytes(text.as_bytes()),
-        ));
+        self.code_sent = Some((rel.clone(), super::code_git::hash_bytes(text.as_bytes())));
         handle.post(super::code_lsp::Request::Open {
-            rel: open.path.clone(),
+            rel: rel.clone(),
             text: text.clone(),
         });
         // Colour, asked for with the file rather than on a key: a reader who
         // has to press something to tell a comment from code is a reader
         // looking at white text until they know the key exists.
-        handle.post(super::code_lsp::Request::Highlight {
-            rel: open.path.clone(),
-            text,
-        });
+        handle.post(super::code_lsp::Request::Highlight { rel, text });
     }
 
     /// Send the buffer if, and only if, it is not the one already sent. A key
@@ -1802,15 +1795,10 @@ impl App {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             return;
         };
-        if open.note.is_some() {
-            return;
-        }
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         let hash = super::code_git::hash_bytes(text.as_bytes());
-        let rel = open.path.clone();
         if self.code_sent.as_ref() == Some(&(rel.clone(), hash)) {
             return;
         }
@@ -1830,18 +1818,11 @@ impl App {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             return;
         };
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
-        self.code_sent = Some((
-            open.path.clone(),
-            super::code_git::hash_bytes(text.as_bytes()),
-        ));
-        handle.post(super::code_lsp::Request::Save {
-            rel: open.path.clone(),
-            text,
-        });
+        self.code_sent = Some((rel.clone(), super::code_git::hash_bytes(text.as_bytes())));
+        handle.post(super::code_lsp::Request::Save { rel, text });
     }
 
     /// Tell the server the buffer is gone, so a document nobody is looking at
@@ -1861,6 +1842,47 @@ impl App {
         self.code_sent = None;
     }
 
+    /// The bridge, or an honest refusal in its place.
+    ///
+    /// **"No bridge in this run" is not "no answer found"**, and the page must
+    /// not show the second when the first is true. Every question a key asks
+    /// began with this block; three copies of a refusal is three chances for
+    /// the fourth question to be added silent.
+    fn code_lsp_handle(&mut self) -> Option<super::code_lsp::Handle> {
+        match self.code_lsp.clone() {
+            Some(handle) => Some(handle),
+            None => {
+                if let Some(view) = self.code.as_mut() {
+                    view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+                }
+                None
+            }
+        }
+    }
+
+    /// What every question about the open file carries: its repo-relative name,
+    /// the buffer as it is on screen, and the cursor.
+    ///
+    /// `None` when there is no readable file open — a refused read has no text
+    /// to ask about, and a request the shell cannot fill comes back to the
+    /// person as silence.
+    ///
+    /// **The buffer, never the file.** `code_git::joined` reassembles the lines
+    /// with the terminator the file was read with, so the server is asked about
+    /// what is on screen rather than about what was last written to disk. That
+    /// sentence was true in five copies of these four lines, and one of them
+    /// had forgotten the `note` check.
+    fn code_lsp_target(&self) -> Option<(String, String, usize, usize)> {
+        let open = self
+            .code
+            .as_ref()?
+            .open
+            .as_ref()
+            .filter(|o| o.note.is_none())?;
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        Some((open.path.clone(), text, open.line, open.col))
+    }
+
     /// Ask what could be typed at the cursor, and for the signature the cursor
     /// is inside.
     ///
@@ -1869,20 +1891,12 @@ impl App {
     /// when there is one, and the signature of the call they are inside when
     /// there is not. Two keys would make the useful one a guess.
     fn code_lsp_complete(&mut self) {
-        let Some(handle) = self.code_lsp.as_ref() else {
-            if let Some(view) = self.code.as_mut() {
-                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
-            }
+        let Some(handle) = self.code_lsp_handle() else {
             return;
         };
-        let Some(view) = self.code.as_ref() else {
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
             return;
         };
-        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
-            return;
-        };
-        let (rel, line, col) = (open.path.clone(), open.line, open.col);
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         handle.post(super::code_lsp::Request::Completion {
             rel: rel.clone(),
             text: text.clone(),
@@ -1901,20 +1915,12 @@ impl App {
     /// contains. One function because the two differ only in the request:
     /// both land in the same panel and are opened by the same key.
     fn code_lsp_places(&mut self, references: bool) {
-        let Some(handle) = self.code_lsp.as_ref() else {
-            if let Some(view) = self.code.as_mut() {
-                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
-            }
+        let Some(handle) = self.code_lsp_handle() else {
             return;
         };
-        let Some(view) = self.code.as_ref() else {
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
             return;
         };
-        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
-            return;
-        };
-        let (rel, line, col) = (open.path.clone(), open.line, open.col);
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         handle.post(if references {
             super::code_lsp::Request::References {
                 rel,
@@ -1929,23 +1935,12 @@ impl App {
 
     /// Ask for hover, or for a definition, at the cursor.
     fn code_lsp_ask(&mut self, definition: bool) {
-        let Some(handle) = self.code_lsp.as_ref() else {
-            // The honest refusal: "no bridge in this run" is not "no definition
-            // found", and the page must not show the second when the first is
-            // true.
-            if let Some(view) = self.code.as_mut() {
-                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
-            }
+        let Some(handle) = self.code_lsp_handle() else {
             return;
         };
-        let Some(view) = self.code.as_ref() else {
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
             return;
         };
-        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
-            return;
-        };
-        let (rel, line, col) = (open.path.clone(), open.line, open.col);
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         handle.post(if definition {
             super::code_lsp::Request::Definition {
                 rel,
@@ -2006,10 +2001,10 @@ impl App {
             .open
             .as_ref()
             .and_then(|o| o.lines.get(line))
-            .map(|l| {
-                let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
-                l[..bytes.min(l.len())].chars().count()
-            })
+            // The bridge's own conversion, not a fourth copy of it: a column
+            // that crosses this boundary twice by two different rules is the
+            // "one input shape, two answers" defect this codebase has paid for.
+            .map(|l| super::code_lsp::char_column_in(l, col as u32))
             .unwrap_or(col);
         view.jump_to(line, converted);
         view.lsp.note = Some(format!("{rel}:{}", line + 1));
@@ -8599,6 +8594,53 @@ mod tests {
         );
         // Nothing selected, so a release copies nothing and says nothing.
         assert!(matches!(app.code_release(), (false, None)));
+    }
+
+    /// **A file the page could not read is never described to a language
+    /// server, and its questions refuse in words.**
+    ///
+    /// `code_lsp_target` is the one place that decides, and it decides for six
+    /// callers; before it existed one of the six had forgotten the check. A
+    /// refused read has no lines, so what would go out is an empty buffer
+    /// claiming to be the file — after which every diagnostic the server
+    /// published about the real file would be wrong.
+    #[test]
+    fn a_file_the_page_could_not_read_is_never_sent_to_a_server() {
+        let td = tempfile::tempdir().unwrap();
+        let mut app = App::new((120, 40));
+        app.toggle_code(&td.path().display().to_string());
+        let (handle, mut rx) = super::super::code_lsp::channel();
+        app.set_code_lsp(handle);
+        app.code.as_mut().unwrap().set_open(
+            "a.bin".to_string(),
+            super::super::code_git::FileRead::Refused("binary file".to_string()),
+            None,
+        );
+
+        app.code_lsp_open();
+        app.code_lsp_changed();
+        app.code_lsp_saved();
+        app.code_lsp_complete();
+        app.code_lsp_places(true);
+        app.code_lsp_ask(true);
+        assert!(
+            rx.try_recv().is_err(),
+            "an unreadable file was described to the server"
+        );
+
+        // And the bridge is wired, so silence here would be the wrong kind of
+        // pass: a readable file does reach it.
+        std::fs::write(td.path().join("a.txt"), "hello\n").unwrap();
+        let read = super::super::code_git::read_file(&td.path().join("a.txt"));
+        app.code
+            .as_mut()
+            .unwrap()
+            .set_open("a.txt".to_string(), read, None);
+        app.code_lsp_open();
+        assert!(
+            matches!(rx.try_recv(), Ok(super::super::code_lsp::Request::Open { rel, .. }) if rel == "a.txt"),
+            "a readable file must still be sent"
+        );
     }
 
     /// A question the Code page composed reaches the shell, which is the seam
