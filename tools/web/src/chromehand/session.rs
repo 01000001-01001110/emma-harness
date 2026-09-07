@@ -229,6 +229,13 @@ fn kill_pid(pid: u32) {
 /// five observed survivals the directory became removable within 1.5s every
 /// time, and Chrome normally exits in well under that. This is the ceiling on
 /// a pathological case, not the expected cost.
+///
+/// **Windows only, and so is everything that reads it** -- the wait itself and
+/// the test that pins it are both `cfg(windows)`, because on Unix a directory
+/// whose files are still open unlinks perfectly well and there is nothing to
+/// wait for. Without the gate this is dead code on macOS, which is what the
+/// first macOS clippy run in this repository's history said.
+#[cfg(windows)]
 const EXIT_WAIT: Duration = Duration::from_secs(3);
 
 /// Block until process `pid` has exited, or `EXIT_WAIT` elapses.

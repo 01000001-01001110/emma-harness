@@ -817,10 +817,26 @@ fn spawn_detached(l: &Launch) -> Result<Spawned, String> {
     }
 }
 
+/// **Unix reads `window` too, and the reason is not the lint.**
+///
+/// `Window::NewConsole`'s own doc says unix plans never produce it, because
+/// unix has no OS-made "new terminal window" -- but nothing enforced that, and
+/// a plan that asked for one here would have been launched silently as a
+/// detached process with null stdio. An interactive shell with no terminal
+/// attached does not report an error; it exits, and the person is told a shell
+/// was opened. So the impossible case is named rather than ignored, which also
+/// answers macOS clippy: before this the field was read only by the Windows
+/// arm, so it was live on one platform and dead on the other.
 #[cfg(not(windows))]
 fn spawn_detached(l: &Launch) -> Result<Spawned, String> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
+    if l.window == Window::NewConsole {
+        return Err(format!(
+            "{} asked for a new console window, which this platform cannot make",
+            l.program.display()
+        ));
+    }
     let mut cmd = std::process::Command::new(&l.program);
     cmd.args(&l.args)
         .current_dir(&l.cwd)
@@ -1314,6 +1330,40 @@ mod tests {
         // Split, this would be vim (with args smuggled somewhere); skipped
         // whole, the chain falls through to the probe and finds code.
         assert_eq!(p, PathBuf::from(host("C:\\vs\\code.cmd")));
+    }
+
+    /// **The impossible plan is refused rather than launched into nothing.**
+    ///
+    /// `Window::NewConsole` says in its own doc that unix plans never produce
+    /// it, and until 2026-09-07 that was a comment rather than a check: a plan
+    /// carrying it would have reached the unix spawn and been started detached
+    /// with null stdio. An interactive shell with no terminal does not fail
+    /// loudly -- it exits immediately, while the catalogue reports that a shell
+    /// was opened. So the promise and the receipt would disagree, silently,
+    /// which is the failure this file exists to avoid.
+    ///
+    /// Unix only, because it is a claim about the unix arm; the Windows arm
+    /// honours the same value by making the window.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_console_window_asked_for_on_unix_is_refused_rather_than_started_blind() {
+        let refused = spawn_detached(&Launch {
+            program: PathBuf::from("/bin/sh"),
+            args: Vec::new(),
+            cwd: PathBuf::from("/"),
+            window: Window::NewConsole,
+            what: "sh in /".to_string(),
+        })
+        .err()
+        .expect("a console window on unix must be refused");
+        assert!(
+            refused.contains("new console window"),
+            "the refusal must name what could not be done: {refused}"
+        );
+        assert!(
+            refused.contains("/bin/sh"),
+            "and which program asked for it: {refused}"
+        );
     }
 
     #[test]
