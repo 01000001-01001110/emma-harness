@@ -651,16 +651,25 @@ impl App {
         }
     }
 
-    /// Select and persist a theme — one mechanism with `/theme <name>`, down
-    /// to what it says about when it takes effect.
+    /// Select a theme: apply it to the running screen, and persist it.
     ///
-    /// **This row selects; it does not switch.** The tree it came from held a
-    /// process-wide active theme and repainted on the next frame. Here a theme
-    /// is read once, at startup, into a `Copy` `Palette` that is already
-    /// duplicated across the viewport, its view and `Term` — the ruling
-    /// `session_command`'s `/theme` region argues in full, and the reason there
-    /// is no `--save` on that command either. So the notice says the same thing
-    /// `/theme` says: written, and in force from the next start.
+    /// **This row switches as well as selecting, and until 2026-09-07 it did
+    /// not.** The tree it came from held a process-wide active theme and
+    /// repainted on the next frame; the port kept that seam for the *accent*
+    /// only, so choosing an accent repainted and choosing a theme did nothing
+    /// visible until the next start. The owner reported it, and the report was
+    /// right for the reason inconsistency usually is: one control answering
+    /// while its neighbour beside it does not reads as broken, whatever the
+    /// notice underneath says.
+    ///
+    /// The palette is still `Copy` and still duplicated across the viewport,
+    /// its view and `Term` — which is exactly why the switch is *ambient*
+    /// rather than a write to each copy. `palette::activate_theme` sets one
+    /// cell that every **live** palette reads at draw time, and only `Term`
+    /// builds a live one, so nothing here reaches a test fixture or a `-p` run.
+    ///
+    /// It is still written to `settings.json` as well, because a repaint is not
+    /// a memory: `/theme <name>` and this row remain one mechanism.
     fn settings_theme(&mut self, name: String) {
         // The name must resolve before anything is written — `/theme`'s
         // ruling, and the reason the lookup is done before the write rather
@@ -671,12 +680,19 @@ impl App {
             return;
         }
         self.settings.theme = name.clone();
+        // Apply before writing. The write can fail -- no home directory, a
+        // read-only file -- and a theme somebody can see is worth more than one
+        // that was only recorded, so the failure message is about persistence
+        // and never about the colours on screen.
+        let (theme, _) = super::theme::load(
+            self.home.as_deref(),
+            self.harness_root.as_deref(),
+            Some(&name),
+        );
+        super::palette::activate_theme(theme);
         self.settings.notice = Some(match self.home.as_deref() {
             Some(home) => match crate::session_command::write_theme(home, &name) {
-                Ok(path) => format!(
-                    "theme {name} — written to {}; in force from the next start",
-                    path.display()
-                ),
+                Ok(path) => format!("theme {name} — applied, and written to {}", path.display()),
                 Err(e) => format!("theme {name} — could not be written ({e})"),
             },
             None => format!(
@@ -7728,10 +7744,20 @@ mod tests {
     /// cycler over one name that asserted it moved would be asserting a bug.
     #[test]
     fn the_theme_row_cycles_the_registry_and_persists_like_slash_theme() {
+        // The row now sets the ambient theme, which is process-global, so this
+        // takes the same guard `palette`'s own ambient tests take.
+        let _ambient = super::super::palette::ambient_reset();
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join(".emma").join("themes");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("oxide.json"), "{}").unwrap();
+        // A theme with a colour in it, because the assertion below is about a
+        // colour: an empty `{}` theme is identical to the built-in, so it could
+        // not tell a working switch from a broken one.
+        std::fs::write(
+            dir.join("oxide.json"),
+            r##"{ "name": "oxide", "roles": { "ok": "#00ff00" } }"##,
+        )
+        .unwrap();
         let mut app = open_settings_at(home.path());
         assert_eq!(
             app.settings.themes,
@@ -7751,8 +7777,36 @@ mod tests {
         let notice = app.settings.notice.clone().unwrap();
         assert!(notice.contains("settings.json"), "no receipt: {notice}");
         assert!(
-            notice.contains("next start"),
-            "a theme is read once, at startup, and the row must say so: {notice}"
+            notice.contains("applied"),
+            "the row switches as well as selecting, and must say so: {notice}"
+        );
+        assert!(
+            !notice.contains("next start"),
+            "it no longer defers, so it must not still promise a restart: {notice}"
+        );
+
+        // **The half a receipt cannot prove.** Asserting the sentence only
+        // pins the wording; this asserts the colour, which is what the owner
+        // reported missing. `oxide` sets `ok` to `#00ff00`, and a *live*
+        // palette -- the kind only `Term` builds -- must now draw it, while the
+        // fixture palette beside it keeps the theme it was handed.
+        let live = super::super::palette::Palette::live(
+            super::super::palette::Level::Truecolor,
+            super::super::theme::BUILTIN,
+        );
+        assert_eq!(
+            live.color(super::super::palette::Role::Ok),
+            ratatui::style::Color::Rgb(0, 255, 0),
+            "selecting a theme must repaint a live palette, not only persist"
+        );
+        assert_ne!(
+            super::super::palette::Palette::with_theme(
+                super::super::palette::Level::Truecolor,
+                super::super::theme::BUILTIN,
+            )
+            .color(super::super::palette::Role::Ok),
+            ratatui::style::Color::Rgb(0, 255, 0),
+            "a palette that is not live must keep the theme it was built with"
         );
     }
 

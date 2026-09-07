@@ -321,6 +321,66 @@ pub fn accent(name: &str) -> Option<&'static Accent> {
     ACCENTS.iter().find(|a| a.name == name)
 }
 
+/// The one lock every test that touches ambient colour takes.
+///
+/// **The accent and the theme are process-global on purpose** -- a `Palette` is
+/// `Copy` and the viewport holds copies, so a picker that changes either must
+/// not have to find them all. The cost is that the parallel test harness lets
+/// one test's selection reach another's palette, which is how the accent's
+/// three tests first read green and then red on the same tree.
+///
+/// It lives here rather than inside `palette::tests` because `app`'s Settings
+/// tests set the same cells through `settings_theme`, and a second lock would
+/// be two answers to one question. Resetting *both* cells is the point: a guard
+/// that cleared only the accent left the theme leaking, which is exactly the
+/// failure that put this comment here.
+#[cfg(test)]
+pub(crate) fn ambient_reset() -> std::sync::MutexGuard<'static, ()> {
+    static AMBIENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = AMBIENT.lock().unwrap_or_else(|e| e.into_inner());
+    activate_accent(&ACCENTS[0]);
+    if let Ok(mut slot) = ACTIVE_THEME.write() {
+        *slot = None;
+    }
+    guard
+}
+
+/// The theme in force, for a palette built with [`Palette::live`].
+///
+/// **The half of the fork's ambient registry the port left behind.** The
+/// comment above this region has said since the port that the accent uses "the
+/// same seam the fork's live palette used, without reintroducing that registry
+/// here" -- and the consequence was a Settings screen where choosing an accent
+/// repainted and choosing a theme did nothing until the next start. One control
+/// answering and its neighbour not is what makes a working feature read as
+/// broken, which is what the owner reported.
+///
+/// A `RwLock` rather than the accent's `AtomicUsize`, because an accent is an
+/// index into a static table and a `Theme` is eighteen entries loaded from a
+/// file at runtime. The read is on the per-cell paint path, which sounds
+/// alarming and is not: the accent already does an ambient read per cell, and
+/// an uncontended `RwLock` read is a handful of nanoseconds against a frame
+/// budget of sixteen milliseconds. Measured cost is a thing to check if a
+/// profile ever says so; assumed cost is not a reason to ship the
+/// inconsistency.
+static ACTIVE_THEME: std::sync::RwLock<Option<Theme>> = std::sync::RwLock::new(None);
+
+/// The theme every live palette draws with, from the next redraw on.
+///
+/// Nothing calls this at startup: the theme resolved there is already inside
+/// the `Palette` that `Term::interactive` builds, and a palette that is not
+/// `live` -- every test fixture, every `-p` run -- never consults this at all.
+pub fn activate_theme(theme: Theme) {
+    if let Ok(mut slot) = ACTIVE_THEME.write() {
+        *slot = Some(theme);
+    }
+}
+
+/// The ambient theme, if one has been chosen since this process started.
+pub fn active_theme() -> Option<Theme> {
+    ACTIVE_THEME.read().ok().and_then(|t| *t)
+}
+
 /// The accent override in force, as an index into [`ACCENTS`].
 static ACTIVE_ACCENT: AtomicUsize = AtomicUsize::new(0);
 
@@ -482,6 +542,23 @@ impl Palette {
         }
     }
 
+    /// The theme this palette draws from: the ambient one when it is live and
+    /// somebody has chosen one, and the resolved one it was built with
+    /// otherwise.
+    ///
+    /// **`live` is the whole safety argument.** Only `Term` builds a live
+    /// palette, so a test fixture, a `-p` run and every `with_theme` caller
+    /// keep the theme they were handed however the ambient cell is set -- which
+    /// is what stops one test's selection leaking into another's colours.
+    fn theme(&self) -> Theme {
+        if self.live {
+            if let Some(t) = active_theme() {
+                return t;
+            }
+        }
+        self.theme
+    }
+
     /// The colour for a role, at whatever fidelity this terminal has.
     ///
     /// **The first line is the whole of the safety argument, and its position
@@ -504,11 +581,11 @@ impl Palette {
         let role = self.resolve_role(role);
         match self.level {
             Level::Truecolor => {
-                let (r, g, b) = self.theme.rgb(role);
+                let (r, g, b) = self.theme().rgb(role);
                 Color::Rgb(r, g, b)
             }
-            Level::Ansi256 => Color::Indexed(self.theme.indexed(role)),
-            _ => self.theme.ansi16(role),
+            Level::Ansi256 => Color::Indexed(self.theme().indexed(role)),
+            _ => self.theme().ansi16(role),
         }
     }
 
@@ -592,7 +669,7 @@ impl Palette {
         if self.level == Level::None {
             return Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
         }
-        let (fg, bg) = self.theme.pair(Pair::Selection);
+        let (fg, bg) = self.theme().pair(Pair::Selection);
         match self.level {
             Level::Truecolor => Style::default()
                 .fg(Color::Rgb(fg.0, fg.1, fg.2))
@@ -665,18 +742,7 @@ mod tests {
     use super::super::theme::{load, BUILTIN};
     use super::*;
 
-    /// The accent is process-global on purpose (see `activate_accent_choice`),
-    /// and the test harness runs tests on parallel threads, so every test
-    /// that sets it takes this guard first and starts from the theme's own.
-    /// Without it these three tests fail each other in whichever order the
-    /// scheduler picks, which is how the first run of them read green and
-    /// the second red.
-    static AMBIENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    fn ambient_reset() -> std::sync::MutexGuard<'static, ()> {
-        let guard = AMBIENT.lock().unwrap_or_else(|e| e.into_inner());
-        activate_accent(&ACCENTS[0]);
-        guard
-    }
+    use super::ambient_reset;
 
     /// The accent override borrows another role's swatch **from the theme in
     /// force**, so it survives a theme switch and never introduces a colour
