@@ -409,6 +409,28 @@ pub const NOTICE_CONTEXT_ABSENT: &str = "No number yet: the meter reads the prov
      from the last call, so it is set by the first model call of the run and not before";
 pub const NOTICE_OUTPUT_CAP: &str = "Emma has no output-token setting; --max-tokens is the \
      per-goal spend budget shown below it, not a cap on one response";
+/// What the Theme row says when there is exactly one theme to say it about.
+///
+/// **This is the sentence a reported defect bought.** The owner said "I cannot
+/// change the theme". He could not: a theme is a file, this repository shipped
+/// none, his `~/.emma/themes` did not exist, and so the list the row cycles had
+/// one entry in it. `theme_step` stepped it — `themes[(i + dir).rem_euclid(1)]`
+/// is always `themes[0]` — the row wrote `emma` over `emma`, and reported
+/// *written to …; in force from the next start*. A control that appears to
+/// work, does nothing, and prints a receipt saying it worked; the stepping was
+/// never the broken part.
+///
+/// So the row stops being a cycler when there is nothing to cycle to, and this
+/// says where a second theme comes from. It names `~/.emma/themes` only,
+/// because that is the one directory this screen's list is built from —
+/// `app.rs` passes `None` for the harness root, so a theme under a project's
+/// own `.emma/themes` is selectable by `/theme <name>` and is not in this row.
+/// Saying "add a file to either directory" here would be the same class of
+/// mistake in prose that the cycler was in pixels.
+pub const NOTICE_THEME_ONE: &str = "emma, the built-in, is the only theme this screen can see, \
+     so there is nothing to step to. A theme is a JSON file: this row lists the *.json in \
+     ~/.emma/themes, and one appears here the run after it is dropped there. A theme in the \
+     project's own .emma/themes is reachable by /theme <name> and not by this row";
 /// Why the Accent row's chevrons walk five names and no more.
 ///
 /// A `cube:N` accent is a real stored value — `palette::parse_accent` reads
@@ -859,7 +881,17 @@ fn cards(s: &SettingsView) -> Vec<Card> {
         Card::new(
             "3. APPEARANCE",
             vec![
-                kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle),
+                // Chevrons only where there is a second name behind them. On a
+                // list of one, ←/→ resolve to the name already on the row and
+                // the shell writes it and says so — see [`NOTICE_THEME_ONE`]
+                // for what that cost. `> 1` rather than `!is_empty()` because
+                // one is the case that actually happens: `theme::names` always
+                // returns the built-in.
+                if s.themes.len() > 1 {
+                    kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle)
+                } else {
+                    kv("Theme", Plain(title_case(&s.theme)), Note(NOTICE_THEME_ONE))
+                },
                 kv(
                     "Accent Color",
                     Cycler(accent_label(&s.accent)),
@@ -2278,6 +2310,10 @@ mod tests {
             cwd: "~/projects/research".into(),
             provider: "ollama".into(),
             theme: "dracula".into(),
+            // Two names, because the row is only a cycler when there is
+            // somewhere to cycle to — a fixture with an empty list describes a
+            // screen `theme::names` cannot produce.
+            themes: vec!["emma".into(), "dracula".into()],
             memory_on: true,
             prune_on: false,
             test: TestState::Ok,
@@ -2777,6 +2813,49 @@ mod tests {
             handle_key(&mut v, press(KeyCode::Enter)),
             SettingsAction::Theme("oxide".to_string()),
             "Enter cycles forward too"
+        );
+    }
+
+    /// The reported defect: with one theme on disk the row drew chevrons,
+    /// ←/→ resolved to the name already showing, and the shell reported a
+    /// write. Nothing about the stepping was wrong — the row was.
+    ///
+    /// Three assertions because three things had to stop: the row is no longer
+    /// a `ThemeCycle`, no chevron is painted around the name, and the key that
+    /// used to produce a write now produces the sentence.
+    #[test]
+    fn one_theme_is_stated_on_the_row_rather_than_cycled() {
+        let mut v = view();
+        v.themes = vec!["emma".into()];
+        v.theme = "emma".into();
+
+        let (slot, _, kind) = rows_of(&v, 2)
+            .into_iter()
+            .find(|(_, label, _)| label == "Theme")
+            .expect("the Appearance card has a Theme row");
+        assert_eq!(
+            kind,
+            RowKind::Note(NOTICE_THEME_ONE),
+            "a cycler over a list of one"
+        );
+
+        let all = draw(&v, 130, 60).join("\n");
+        assert!(
+            !all.contains("‹ Emma ›"),
+            "chevrons drawn with nothing behind them"
+        );
+        assert!(all.contains("Emma"), "the theme in force is not on the row");
+
+        focus(&mut v, 2, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::FocusChanged,
+            "→ still asked the shell to write a theme"
+        );
+        assert_eq!(v.notice.as_deref(), Some(NOTICE_THEME_ONE));
+        assert!(
+            NOTICE_THEME_ONE.contains("~/.emma/themes"),
+            "the sentence does not say where a theme file goes"
         );
     }
 

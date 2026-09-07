@@ -1624,6 +1624,27 @@ impl App {
         self.code.is_some()
     }
 
+    /// Everything that happens after the page has answered a key, a click, a
+    /// paste or a release, in one place because all four need all of it.
+    ///
+    /// **Four call sites and one body, because the order is the interesting
+    /// part and it was written out four times.** The action is carried out
+    /// first, then the buffer goes to the server, and only then is a completion
+    /// asked for -- a list asked for by a typed dot has to be computed against
+    /// the text that includes the dot, and the first version of this had the
+    /// two the other way round. Four copies of an ordering constraint is four
+    /// chances for one of them to be reordered by somebody who did not know it
+    /// was one.
+    ///
+    /// `code_lsp_changed` returns without posting when the buffer is the one
+    /// already sent, so a cursor key costs a hash and nothing else.
+    fn code_did(&mut self, action: super::code::CodeAction) -> (bool, Option<CodeJob>) {
+        let job = self.code_act(action);
+        self.code_lsp_changed();
+        self.code_lsp_auto_complete();
+        (true, job)
+    }
+
     /// One key for the open Code page. The bool is whether the page kept it;
     /// the predicate is [`super::code::takes_key`], so the shell and the page
     /// cannot disagree about which keys belong to it.
@@ -1642,15 +1663,7 @@ impl App {
             let v = self.code.as_mut().expect("checked just above");
             super::code::handle_key(v, key)
         };
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        // After the buffer has been sent, so a list asked for by a typed dot is
-        // computed against the text that includes it.
-        self.code_lsp_auto_complete();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A left press while the Code page is open. `false` lets the press fall
@@ -1665,15 +1678,7 @@ impl App {
             return (false, None);
         };
         let action = super::code::act(v, hit);
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        // After the buffer has been sent, so a list asked for by a typed dot is
-        // computed against the text that includes it.
-        self.code_lsp_auto_complete();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A bracketed paste while the Code page is open. `false` when the page is
@@ -1683,15 +1688,7 @@ impl App {
             return (false, None);
         };
         let action = v.paste_text(text);
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        // After the buffer has been sent, so a list asked for by a typed dot is
-        // computed against the text that includes it.
-        self.code_lsp_auto_complete();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A drag with the button down over the Code page's document: the
@@ -1721,15 +1718,7 @@ impl App {
         if action == super::code::CodeAction::None {
             return (false, None);
         }
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        // After the buffer has been sent, so a list asked for by a typed dot is
-        // computed against the text that includes it.
-        self.code_lsp_auto_complete();
-        (true, job)
+        self.code_did(action)
     }
 
     /// The wheel while the Code page is open: the body scrolls, the tree does

@@ -239,7 +239,7 @@
     <code>a_theme_chooses_colours_and_never_how_many_of_them_there_are</code>.
   </p>
 
-  <h2 id="roles">Eight roles, and what each is for</h2>
+  <h2 id="roles">Fourteen roles, and what each is for</h2>
 
   <div class="tw">
     <table>
@@ -253,6 +253,12 @@
         <tr><td><code>Info</code></td><td>A tool, a host, a path: the nouns in a line.</td><td><code>#8ec07c</code></td></tr>
         <tr><td><code>Accent</code></td><td>The goal, the prompt, Emma itself.</td><td><code>#f5548f</code></td></tr>
         <tr><td><code>Ground</code></td><td>Only ever a foreground on an accent background: the answer keys.</td><td><code>#0d0d10</code></td></tr>
+        <tr><td><code>Comment</code></td><td>A comment in source on the Code page. Dimmer than <code>Dim</code>.</td><td><code>#7c7974</code></td></tr>
+        <tr><td><code>Keyword</code></td><td>A keyword or a modifier.</td><td><code>#d3869b</code></td></tr>
+        <tr><td><code>Str</code></td><td>A string or a regular expression.</td><td><code>#98ac74</code></td></tr>
+        <tr><td><code>Number</code></td><td>A numeric literal.</td><td><code>#d49e6a</code></td></tr>
+        <tr><td><code>Type</code></td><td>A type, struct, enum, interface or type parameter.</td><td><code>#7eada8</code></td></tr>
+        <tr><td><code>Func</code></td><td>A function, method or macro.</td><td><code>#81a1c1</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -264,6 +270,20 @@
     they are arguments about what a role means, <em>&ldquo;and the person most
     likely to reverse one by accident is somebody editing a theme file who never
     opens the loader.&rdquo;</em> Four of them travel with the role.
+  </p>
+
+  <p>
+    <strong>The last six arrived on 2026-09-06, when the Code page started
+    colouring source from the language server.</strong> They sit in the same
+    family as the eight above rather than importing another editor&rsquo;s
+    palette, so a file on that page looks like the rest of Emma. Two of the
+    choices carry an argument. A comment is dimmer than <code>Dim</code>,
+    because <code>Dim</code> is chrome a reader glances at and a comment is text
+    a reader is choosing not to read. And the keyword is the accent&rsquo;s hue
+    desaturated, so a screen of <code>let</code> and <code>fn</code> does not
+    compete with Emma&rsquo;s own chrome for attention. Function is blue, the
+    one family nothing else uses, so a call reads as its own thing beside the
+    type it is called on.
   </p>
 
   <ul class="body">
@@ -505,7 +525,8 @@
 
   <p>
     The four small helpers on top of <code>color</code> are
-    <code>style</code> (a foreground), <code>dim</code> (the
+    <code>style</code> (a foreground, and for one role a modifier as well),
+    <code>dim</code> (the
     <code>Dim</code> role <em>plus</em> <code>Modifier::DIM</code>, so a
     colourless terminal still separates a note from a line somebody has to
     read), <code>bold</code>, and the two pair functions above.
@@ -515,11 +536,30 @@
     <code>with_theme</code>.
   </p>
 
+  <p>
+    <strong><code>style</code> adds <code>Modifier::DIM</code> for
+    <code>Role::Comment</code> and for no other role</strong>, which is
+    <code>dim</code>&rsquo;s reason rather than a flourish. At
+    <code>Level::None</code> every colour is <code>Color::Reset</code>, so a
+    comment and the code it explains would be the same white text, which is the
+    exact complaint the palette was extended to answer. A modifier is the
+    only separation a terminal with no colour can still draw. Dimming the code
+    as well would be worse than nothing, so nothing else is dimmed, and the
+    modifier stays on at every fidelity: a comment is quieter than the rest
+    whatever the terminal can do.
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
+    <code>a_comment_is_dim_even_on_a_terminal_with_no_colour</code> asserts the
+    comment carries <code>DIM</code> at <code>Level::None</code>, that
+    <code>Role::Keyword</code> does not, and that the modifier survives at
+    truecolor.
+  </p>
+
   <h2 id="table">The whole built-in palette, pinned</h2>
 
   <p>
     <code>the_built_in_theme_renders_exactly_what_shipped</code> is a full table
-    of eight roles at four fidelities, thirty-two assertions, and its doc says
+    of the original eight roles at four fidelities, thirty-two assertions, and its doc says
     why it is written as literals rather than as properties: <em>&ldquo;the
     failure it guards against is a single value drifting during the move, which
     no property test can see, since every property here (degradation, accent
@@ -529,6 +569,25 @@
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>The six source-code hexes
+    are not pinned to their values anywhere.</strong> That table stops at
+    <code>Ground</code>. The other assertion,
+    <code>the_builtin_theme_is_what_emma_renders_today</code> in
+    <code>theme.rs</code>, walks all fourteen roles comparing the live
+    <code>Palette</code> against <code>BUILTIN</code>, which is close to a
+    tautology now that <code>palette.rs</code> reads <code>BUILTIN</code>: it
+    pins the <em>shape</em> (<code>Rgb</code> at 24 bits, <code>Indexed</code> at
+    256, a named colour at 16) and not the colour. Its literal receipts cover
+    seven of the original eight and none of the six. So a typo in
+    <code>#7c7974</code> would go green.
+    <em>What would settle it:</em> six more rows in the
+    <code>palette.rs</code> table, or six literal
+    <code>assert_eq!(BUILTIN.rgb(Role::Comment), (124, 121, 116))</code> lines
+    beside the seven already in <code>theme.rs</code>.
+    <a href="roadmap.html#hazards">Recorded as a hazard.</a>
   </p>
 
   <h2 id="accent">The accent can be overridden, by role or by cube index</h2>

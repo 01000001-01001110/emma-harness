@@ -964,6 +964,270 @@ mod tests {
         assert!(parse_signatures(&json!(null)).is_none());
     }
 
+    // -- what the two point tools render ------------------------------------
+    //
+    // `completions` and `signatures` are the two renderers with nothing between
+    // the wire and the sentence a model reads. Everything above proves the
+    // *parse*; a correct parse rendered into the wrong sentence is still a wrong
+    // answer, and for these two the wrong sentence is specific — a re-sorted
+    // list throws away the only thing asking a compiler bought, and a silently
+    // truncated one is read as the whole answer.
+
+    /// **The server's order is kept, and nothing here re-sorts it.**
+    ///
+    /// What breaks if this fails: rust-analyzer encodes relevance in `sortText`
+    /// — the item a person most likely wants is first, and that has nothing to
+    /// do with the alphabet. A renderer that sorted by label would produce a
+    /// list that looks tidy, reads as ranked, and is not. The fixture is built
+    /// so the two orders are exact reverses, so an alphabetical sort cannot
+    /// coincide with a correct answer.
+    #[test]
+    fn a_completion_list_is_rendered_in_the_servers_order_and_never_re_sorted() {
+        let out = completions(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({
+                "isIncomplete": false,
+                "items": [
+                    { "label": "zebra", "kind": 5, "sortText": "aaa" },
+                    { "label": "moose", "kind": 5, "sortText": "bbb" },
+                    { "label": "aardvark", "kind": 5, "sortText": "ccc" },
+                ],
+            }),
+        );
+        let body: Vec<&str> = out
+            .content
+            .lines()
+            .filter(|l| l.starts_with("field: "))
+            .collect();
+        assert_eq!(
+            body,
+            vec!["field: zebra", "field: moose", "field: aardvark"],
+            "the server's ranking was replaced with an alphabetical one: {}",
+            out.content
+        );
+        assert_eq!(out.display.as_deref(), Some("3 completions"));
+        assert!(!out.truncated, "{:?}", out.truncation);
+    }
+
+    /// **Past the cap it is cut, and the cut is admitted in the body, in the
+    /// display and in the truncation reason.**
+    ///
+    /// What breaks if this fails: silent truncation is indistinguishable from a
+    /// short answer, and a model that believes it has seen every candidate
+    /// concludes the member it wanted does not exist. The number in the
+    /// admission is the *total*, not the shown count — otherwise the admission
+    /// admits nothing.
+    #[test]
+    fn a_completion_list_past_the_cap_is_cut_and_the_cut_is_admitted() {
+        let items: Vec<Value> = (0..MAX_COMPLETIONS + 5)
+            .map(|i| json!({ "label": format!("item{i:03}"), "sortText": format!("{i:03}") }))
+            .collect();
+        let total = items.len();
+        let out = completions(&server(), Readiness::Ready, None, &json!(items));
+
+        let shown = out
+            .content
+            .lines()
+            .filter(|l| l.starts_with("item"))
+            .count();
+        assert_eq!(shown, MAX_COMPLETIONS, "{}", out.content);
+        assert!(
+            out.content
+                .contains(&format!("[{MAX_COMPLETIONS} of {total} shown, best first]")),
+            "the body does not say the list was cut: {}",
+            out.content
+        );
+        assert!(out.truncated, "the cut was not admitted: {}", out.content);
+        let reason = out
+            .truncation
+            .as_deref()
+            .expect("a reason, not just a flag");
+        assert!(reason.contains(&total.to_string()), "{reason}");
+        assert!(
+            reason.contains("No argument raises that"),
+            "a cap with no remedy must say so rather than implying one: {reason}"
+        );
+    }
+
+    /// `isIncomplete` reaches the reader as a sentence rather than dying in the
+    /// parse. A truncated list read as the whole answer is a list that appears
+    /// to run out of suggestions as you type.
+    #[test]
+    fn an_incomplete_list_says_so_in_the_result_a_model_reads() {
+        let incomplete = completions(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({ "isIncomplete": true, "items": [{ "label": "push" }] }),
+        );
+        assert!(
+            incomplete
+                .content
+                .contains("called its own list incomplete"),
+            "{}",
+            incomplete.content
+        );
+        // The control: a complete list must not carry the sentence, or the
+        // sentence means nothing.
+        let complete = completions(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({ "isIncomplete": false, "items": [{ "label": "push" }] }),
+        );
+        assert!(
+            !complete.content.contains("incomplete"),
+            "{}",
+            complete.content
+        );
+    }
+
+    /// An empty list is a sentence, and *which* sentence depends on readiness —
+    /// the rule the whole crate is built around, in a renderer that had nothing
+    /// connecting the two.
+    #[test]
+    fn an_empty_completion_list_is_a_sentence_and_obeys_the_readiness_rule() {
+        let ready = completions(&server(), Readiness::Ready, None, &json!([]));
+        assert!(
+            ready.content.contains("No completions found"),
+            "{}",
+            ready.content
+        );
+        assert!(
+            ready.content.contains("there are none"),
+            "{}",
+            ready.content
+        );
+
+        let unready = completions(&server(), Readiness::Indexing, None, &json!([]));
+        assert!(
+            unready.content.contains("still indexing"),
+            "{}",
+            unready.content
+        );
+        assert!(
+            !unready.content.contains("there are none"),
+            "an unindexed server was allowed to say nothing can be typed here: {}",
+            unready.content
+        );
+    }
+
+    /// **The active signature is marked and its active parameter is named.**
+    ///
+    /// What breaks if this fails: signature help answers exactly one question —
+    /// which argument am I typing — and an unmarked list of overloads does not
+    /// answer it. Two signatures, so "marked" has a wrong answer available.
+    #[test]
+    fn the_active_signature_is_marked_and_its_active_parameter_is_named() {
+        let out = signatures(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({
+                "activeSignature": 1,
+                "signatures": [
+                    { "label": "fn take(a: u8)", "parameters": [{ "label": "a: u8" }] },
+                    {
+                        "label": "fn take(a: u8, b: u8)",
+                        "parameters": [{ "label": "a: u8" }, { "label": "b: u8" }],
+                        "activeParameter": 1,
+                    },
+                ],
+            }),
+        );
+        assert!(
+            out.content.contains("> fn take(a: u8, b: u8)"),
+            "the active signature is not marked: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("  fn take(a: u8)\n"),
+            "the inactive signature was marked or dropped: {}",
+            out.content
+        );
+        // 1-based in the sentence, because the reader is counting arguments in
+        // a call rather than indices in a list.
+        assert!(
+            out.content.contains("argument 2: b: u8"),
+            "the active parameter is not named: {}",
+            out.content
+        );
+        assert_eq!(out.display.as_deref(), Some("2 signatures"));
+    }
+
+    /// `None` from `parse_signatures` renders the no-results line, in both
+    /// readiness states. This is the renderer where "the server said nothing"
+    /// and "there is no such call" arrive as the same JSON.
+    #[test]
+    fn no_signatures_renders_the_no_results_line_and_obeys_readiness() {
+        let ready = signatures(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({ "signatures": [] }),
+        );
+        assert!(
+            ready.content.contains("No signature found"),
+            "{}",
+            ready.content
+        );
+        assert!(
+            ready.content.contains("there are none"),
+            "{}",
+            ready.content
+        );
+        assert_eq!(ready.display.as_deref(), Some("0 signatures"));
+
+        let unready = signatures(&server(), Readiness::Indexing, None, &json!(null));
+        assert!(
+            unready.content.contains("still indexing"),
+            "{}",
+            unready.content
+        );
+        assert!(
+            !unready.content.contains("there are none"),
+            "{}",
+            unready.content
+        );
+    }
+
+    /// **A server naming a parameter index its own list does not have is said,
+    /// not invented.**
+    ///
+    /// What breaks if this fails: the obvious repair is to clamp the index to
+    /// the last parameter, which turns "I do not know which argument you are
+    /// typing" into a confident and wrong "you are typing the last one". Servers
+    /// do this — a variadic signature, or an overload set whose
+    /// `activeParameter` belongs to a different member.
+    #[test]
+    fn an_active_parameter_the_server_did_not_list_is_said_rather_than_named() {
+        let out = signatures(
+            &server(),
+            Readiness::Ready,
+            None,
+            &json!({
+                "activeParameter": 4,
+                "signatures": [{
+                    "label": "fn take(a: u8, b: u8)",
+                    "parameters": [{ "label": "a: u8" }, { "label": "b: u8" }],
+                }],
+            }),
+        );
+        assert!(
+            out.content
+                .contains("argument 5 (the server named an index it did not list)"),
+            "{}",
+            out.content
+        );
+        assert!(
+            !out.content.contains("argument 5: "),
+            "a parameter name was invented for an index the server did not list: {}",
+            out.content
+        );
+    }
+
     // -- semantic tokens ----------------------------------------------------
 
     fn legend() -> Legend {
@@ -1284,6 +1548,130 @@ pub struct Completion {
     /// literal characters. Carried so a consumer that cannot expand one can say
     /// so rather than inserting the braces.
     pub snippet: bool,
+}
+
+/// The most completions written out for the model.
+///
+/// Smaller than [`MAX_SYMBOLS`] on purpose. A completion list is *ranked*, so
+/// the answer to "there were more" is almost never "show more" -- it is "type
+/// another letter". Three hundred candidates would be three hundred lines of
+/// context spent to say what the first forty already said.
+pub const MAX_COMPLETIONS: usize = 40;
+
+/// What can be typed at a position, for the model rather than for a popup.
+///
+/// **The server's own order is kept**, which is the whole value of asking a
+/// compiler instead of grepping: rust-analyzer ranks by relevance in `sortText`
+/// and an alphabetical list throws that away. `parse_completions` has already
+/// sorted on it.
+///
+/// The insert text is printed only when it differs from the label, because for
+/// most items they are the same string and a column of duplicates is noise. A
+/// snippet says so rather than being printed with its `${1:...}` placeholders
+/// as if they were characters to type.
+pub fn completions(
+    server: &Server,
+    readiness: Readiness,
+    health: Option<&str>,
+    value: &Value,
+) -> ToolOutcome {
+    let (items, incomplete) = parse_completions(value);
+    let body = if items.is_empty() {
+        no_results_line("completions", readiness)
+    } else {
+        let mut lines: Vec<String> = Vec::new();
+        for item in items.iter().take(MAX_COMPLETIONS) {
+            let kind = if item.kind.is_empty() {
+                String::new()
+            } else {
+                format!("{}: ", item.kind)
+            };
+            let detail = item
+                .detail
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("  {}", clip(d)))
+                .unwrap_or_default();
+            let insert = if item.snippet {
+                "  [snippet]".to_string()
+            } else if item.insert != item.label {
+                format!("  [inserts {:?}]", item.insert)
+            } else {
+                String::new()
+            };
+            lines.push(format!("{kind}{}{detail}{insert}", item.label));
+        }
+        let mut body = lines.join("\n");
+        if items.len() > MAX_COMPLETIONS {
+            body.push_str(&format!(
+                "\n[{MAX_COMPLETIONS} of {} shown, best first]",
+                items.len()
+            ));
+        }
+        if incomplete {
+            // The server's own word, not an inference: `isIncomplete` means it
+            // stopped early and a longer prefix would get a different list.
+            body.push_str("\n[the server called its own list incomplete: type more of the word]");
+        }
+        body
+    };
+
+    let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
+        .with_display(format!("{} completions", items.len()));
+    if items.len() > MAX_COMPLETIONS {
+        outcome.truncated_because(format!(
+            "{MAX_COMPLETIONS} of {} completions shown, in the server's own order of \
+             relevance. No argument raises that -- ask at a position with more of the word \
+             typed, which is what narrows a completion list",
+            items.len()
+        ))
+    } else {
+        outcome
+    }
+}
+
+/// The signatures a call could be, and which argument the position is in.
+///
+/// **The active parameter is marked in the text rather than reported as a
+/// number**, because a number is a fact about a list the reader then has to
+/// count through, and the thing they asked is "which one am I typing".
+pub fn signatures(
+    server: &Server,
+    readiness: Readiness,
+    health: Option<&str>,
+    value: &Value,
+) -> ToolOutcome {
+    let parsed = parse_signatures(value);
+    let count = parsed.as_ref().map(|(s, _)| s.len()).unwrap_or(0);
+    let body = match parsed {
+        None => no_results_line("signature", readiness),
+        Some((sigs, active)) => {
+            let mut lines: Vec<String> = Vec::new();
+            for (i, sig) in sigs.iter().enumerate() {
+                let lead = if i == active { "> " } else { "  " };
+                lines.push(format!("{lead}{}", clip(&sig.label)));
+                if i == active {
+                    if let Some(at) = sig.active_parameter {
+                        match sig.parameters.get(at) {
+                            Some(p) => lines.push(format!("  argument {}: {p}", at + 1)),
+                            // The server named an index its own parameter list
+                            // does not have. Said plainly: an invented name
+                            // here would be a wrong answer about which argument
+                            // is being typed, which is the only question asked.
+                            None => lines.push(format!(
+                                "  argument {} (the server named an index it did not list)",
+                                at + 1
+                            )),
+                        }
+                    }
+                }
+            }
+            lines.join("\n")
+        }
+    };
+    ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health))).with_display(
+        format!("{count} signature{}", if count == 1 { "" } else { "s" }),
+    )
 }
 
 /// `CompletionItemKind`, which is a bare integer on the wire.

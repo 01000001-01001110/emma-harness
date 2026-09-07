@@ -1009,6 +1009,95 @@ mod tests {
         assert!(notices.is_empty(), "{notices:?}");
     }
 
+    /// The six source-code roles, written into a file and read back.
+    ///
+    /// They were settable from the moment they were added to `SETTABLE`, and
+    /// nothing had ever put one in a file and asked what colour came out — the
+    /// claim was believed rather than checked, which is exactly the kind this
+    /// project has been bitten by. A theme that set the other seven and not
+    /// these would leave the Code page painted in the built-in's colours over
+    /// somebody else's palette.
+    #[test]
+    fn a_theme_may_colour_source_code_and_all_six_roles_come_back_changed() {
+        let home = tempfile::tempdir().unwrap();
+        user_theme(
+            home.path(),
+            "src",
+            r##"{ "roles": { "comment": "#111111", "keyword": "#222222",
+                            "string": "#333333", "number": "#444444",
+                            "type": "#555555", "function": "#666666" } }"##,
+        );
+        let (theme, notices) = load(Some(home.path()), None, Some("src"));
+        assert!(notices.is_empty(), "{notices:?}");
+        for (role, rgb) in [
+            (Role::Comment, (0x11, 0x11, 0x11)),
+            (Role::Keyword, (0x22, 0x22, 0x22)),
+            (Role::Str, (0x33, 0x33, 0x33)),
+            (Role::Number, (0x44, 0x44, 0x44)),
+            (Role::Type, (0x55, 0x55, 0x55)),
+            (Role::Func, (0x66, 0x66, 0x66)),
+        ] {
+            // The fixture has to be a colour the built-in is not, or the
+            // assertion below would pass on a role that was never applied.
+            assert_ne!(BUILTIN.rgb(role), rgb, "{role:?}: fixture is the default");
+            assert_eq!(theme.rgb(role), rgb, "{role:?} kept the built-in colour");
+            assert_eq!(theme.indexed(role), derive_index(rgb), "{role:?} at 256");
+            // Inherited, on the same rule as every other role: the file said
+            // nothing about sixteen colours.
+            assert_eq!(theme.ansi16(role), BUILTIN.ansi16(role), "{role:?} at 16");
+        }
+        // …and the seven chrome roles are untouched, which is what makes this
+        // a theme of the *code* rather than a different theme.
+        assert_eq!(theme.rgb(Role::Accent), BUILTIN.rgb(Role::Accent));
+    }
+
+    /// The themes this repository ships, read from the real files.
+    ///
+    /// A fixture agrees with its author; these are the files a cloner gets, so
+    /// they are loaded through `load` exactly as a run loads them. Every role
+    /// is asserted to differ from the built-in's, which is how a theme that
+    /// set the seven chrome roles and forgot the six source ones — or any one
+    /// of the thirteen — turns this red.
+    ///
+    /// The path is the repository's `.emma/`, which is what `harness_root` is:
+    /// the discovered harness *directory*, not the repository root. A themes
+    /// directory at the root would be read by nothing.
+    #[test]
+    fn the_shipped_themes_load_with_nothing_to_report() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.emma");
+        let names = names(None, Some(&root));
+        for want in ["daylight", "nocturne"] {
+            assert!(
+                names.iter().any(|n| n == want),
+                "{want} is not in {names:?}"
+            );
+        }
+        for name in names.iter().filter(|n| n.as_str() != BUILT_IN) {
+            let (theme, notices) = load(None, Some(&root), Some(name));
+            assert!(notices.is_empty(), "{name}: {notices:?}");
+            for role in ROLES {
+                if role == Role::Text {
+                    // Not settable, and refused if a file tries.
+                    continue;
+                }
+                assert_ne!(
+                    theme.rgb(role),
+                    BUILTIN.rgb(role),
+                    "{name} leaves {role:?} at the built-in colour"
+                );
+            }
+            // Both pairs declared, and both applied — a pair is refused whole
+            // when it is half-written or resolves to one colour, so this is
+            // also the receipt that neither did.
+            assert_ne!(theme.pair(Pair::Chip), BUILTIN.pair(Pair::Chip), "{name}");
+            assert_ne!(
+                theme.pair(Pair::Selection),
+                BUILTIN.pair(Pair::Selection),
+                "{name}"
+            );
+        }
+    }
+
     /// The rule that keeps Emma legible on a background nobody here can see.
     #[test]
     fn a_theme_cannot_colour_ordinary_text() {

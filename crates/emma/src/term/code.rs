@@ -865,6 +865,16 @@ impl CodeView {
         // is dropped here for. What is half-typed in the box is the person's
         // and stays.
         self.strip.sent = None;
+        // Every answer about the *previous* file goes with it, and the popup is
+        // the one that could do damage: it inserts into the buffer, so one left
+        // standing across a file switch would put the old file's candidate into
+        // the new file's text. The hover, the panel and the colours are only
+        // wrong on screen, which is reason enough on its own.
+        self.lsp.popup = None;
+        self.lsp.places = None;
+        self.lsp.hover = None;
+        self.lsp.tokens.clear();
+        self.lsp.tokens_for = None;
     }
 
     /// The shell's answer to [`CodeAction::Save`].
@@ -1726,11 +1736,6 @@ impl CodeView {
         self.lsp.at_line(open.line)
     }
 
-    /// Ask for hover or a definition, if there is a file to ask about.
-    ///
-    /// The refusal is the honest half: with no readable file open there is no
-    /// position to ask about, and a request the shell cannot fill would come
-    /// back to the person as silence.
     /// Put the chosen completion into the buffer.
     ///
     /// The range replaced is the server's when it named one, and the identifier
@@ -1738,6 +1743,7 @@ impl CodeView {
     /// the language: it is the same rule every editor uses, and the server's
     /// own range is preferred precisely because it *is* language-aware.
     pub fn accept_completion(&mut self) -> CodeAction {
+        let origin = self.lsp.popup.as_ref().map(|p| p.origin);
         let Some(chosen) = self.lsp.popup.as_ref().and_then(|p| p.chosen()).cloned() else {
             // Nothing matches what has been typed. Closing without inserting is
             // the honest answer; inserting the first item of a list the person
@@ -1753,7 +1759,18 @@ impl CodeView {
             return CodeAction::FocusChanged;
         };
         let chars: Vec<char> = line.chars().collect();
-        let (from, to) = match chosen.replace {
+        // **The server's range is only good where the server was asked.** It
+        // was computed at `origin`, and the list narrows as somebody types
+        // without asking again, so by the time this runs the cursor has usually
+        // moved. rust-analyzer answers a dot completion with an *empty* replace
+        // range at the request position -- certified, 1.94.1 -- so applying it
+        // after three more letters inserts the candidate and leaves those three
+        // behind: `c.pus` accepted as `push` became `c.pushpus`. When the cursor
+        // has moved, the word before it is the honest range, which is the same
+        // rule every editor uses and the same fallback a server naming no range
+        // already gets.
+        let moved = origin != Some((o.line, o.col));
+        let (from, to) = match chosen.replace.filter(|_| !moved) {
             Some((a, b)) => (a.min(chars.len()), b.min(chars.len())),
             None => (word_start(&chars, o.col), o.col.min(chars.len())),
         };
@@ -1767,6 +1784,11 @@ impl CodeView {
         CodeAction::FocusChanged
     }
 
+    /// Ask for hover or a definition, if there is a file to ask about.
+    ///
+    /// The refusal is the honest half: with no readable file open there is no
+    /// position to ask about, and a request the shell cannot fill would come
+    /// back to the person as silence.
     fn ask_lsp(&mut self, action: CodeAction) -> CodeAction {
         if self.open.as_ref().is_none_or(|o| o.note.is_some()) {
             self.lsp.note = Some("open a text file first".to_string());
@@ -1774,6 +1796,23 @@ impl CodeView {
         }
         self.lsp.note = None;
         action
+    }
+
+    /// Ask for a completion list, which needs one thing more than the others.
+    ///
+    /// **The document has to be being edited.** Every other question here
+    /// answers into a note or a panel, and this one answers into a popup whose
+    /// only exit is a key that `edit_key` owns: opened from the tree or from a
+    /// read-only document, it covered the code and nothing dismissed it, and
+    /// `Esc` closed the page out from under it. Worse, it survived opening a
+    /// second file, so accepting it later inserted the first file's candidate
+    /// into the second file's buffer.
+    fn ask_complete(&mut self) -> CodeAction {
+        if !self.editing() {
+            self.lsp.note = Some("press Enter to edit before asking what can be typed".to_string());
+            return CodeAction::FocusChanged;
+        }
+        self.ask_lsp(CodeAction::Complete)
     }
 }
 
@@ -1887,7 +1926,15 @@ pub fn takes_key(v: &CodeView, key: KeyEvent) -> bool {
         return false;
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return key.code == KeyCode::Char('s') && v.editing();
+        // **Two chords now, and the second was advertised for a fortnight
+        // without ever arriving.** `Ctrl+space` is named on the help row and in
+        // the module header, and this predicate returned `false` for it, so the
+        // completion arm in `handle_key` was unreachable code and the key did
+        // nothing at all -- the exact "drawn control that does nothing" the
+        // page refuses everywhere else. It is admitted here and answered above
+        // the save chord, because the blanket `Ctrl` arm below that would
+        // otherwise *save the file* when somebody asked for a completion.
+        return key.code == KeyCode::Char(' ') || (key.code == KeyCode::Char('s') && v.editing());
     }
     true
 }
@@ -1915,7 +1962,12 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         return CodeAction::None;
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        // `takes_key` let exactly one chord through.
+        // `takes_key` lets two chords through, and this one must be answered
+        // before the save: an unqualified `Ctrl` arm would turn a request for a
+        // completion into a write to disk.
+        if key.code == KeyCode::Char(' ') {
+            return v.ask_complete();
+        }
         return v.request_save();
     }
     if key.code == KeyCode::F(2) {
@@ -1971,10 +2023,7 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         // terminals swallow it; `F9` is the escape hatch that always arrives.
         // Both are drawn on the help row, so nobody has to discover the second
         // after the first appeared to do nothing.
-        KeyCode::Char(' ') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return v.ask_lsp(CodeAction::Complete)
-        }
-        KeyCode::F(9) => return v.ask_lsp(CodeAction::Complete),
+        KeyCode::F(9) => return v.ask_complete(),
         _ => {}
     }
     v.notice = None;
@@ -2100,16 +2149,13 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
 
 /// What the server said this character is, as a colour role.
 ///
-/// A linear scan of the line's tokens rather than an index, because a line has
-/// a handful of them and building a map per repaint would cost more than it
-/// saves. `Role::Text` when nothing covers the character, which is both the
-/// answer for ordinary identifiers and the answer when there is no server.
-fn syntax_role(tokens: &[emma_tools_lsp::render::Token], line: usize, col: usize) -> Role {
+/// A linear scan of **one line's** tokens, which is what [`tokens_on_line`]
+/// hands it: a line has a handful, and a map built per repaint would cost more
+/// than it saves. `Role::Text` when nothing covers the character, which is both
+/// the answer for ordinary identifiers and the answer when there is no server.
+fn syntax_role(tokens: &[emma_tools_lsp::render::Token], col: usize) -> Role {
     use emma_tools_lsp::render::TokenKind;
-    let Some(token) = tokens
-        .iter()
-        .find(|t| t.line == line && col >= t.start && col < t.end)
-    else {
+    let Some(token) = tokens.iter().find(|t| col >= t.start && col < t.end) else {
         return Role::Text;
     };
     match token.kind {
@@ -2121,6 +2167,27 @@ fn syntax_role(tokens: &[emma_tools_lsp::render::Token], line: usize, col: usize
         TokenKind::Func => Role::Func,
         TokenKind::Other => Role::Text,
     }
+}
+
+/// The run of tokens that belong to one line.
+///
+/// **Two binary searches rather than a filter, and the reason is a measurement
+/// rather than a preference.** `parse_tokens` returns the answer in the order
+/// the wire sent it, which is line order, so the tokens for a line are a
+/// contiguous run. Before this the painter asked every token in the file about
+/// every cell it drew: 28,330 tokens for this file against roughly five
+/// thousand cells, on every repaint, which is every keystroke.
+///
+/// An empty slice for a line with nothing on it, and for every line when there
+/// is no server — the same answer, which is what makes the caller's plain-text
+/// fallback one branch instead of two.
+fn tokens_on_line(
+    tokens: &[emma_tools_lsp::render::Token],
+    line: usize,
+) -> &[emma_tools_lsp::render::Token] {
+    let start = tokens.partition_point(|t| t.line < line);
+    let end = start + tokens[start..].partition_point(|t| t.line == line);
+    &tokens[start..end]
 }
 
 /// Whether typing `c` should ask for a completion list.
@@ -3661,9 +3728,16 @@ fn help_line(v: &CodeView) -> String {
             "↑/↓ pick a commit · Enter shows its patch · b back to the file · F3 or click FILE"
                 .to_string()
         }
-        Mode::File => "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits \
-                       · F3 HISTORY · F5 hover · F6 definition · F8 uses                        · F10 outline · F9 complete · F7 editor"
-            .to_string(),
+        // One `concat!` rather than a `\`-continued literal. rustfmt joins a
+        // continued string back onto one line and keeps the *leading* spaces of
+        // the following line, which put twenty-four of them into the middle of
+        // this row on the screen. `no_help_row_has_a_gap_in_it` is the receipt.
+        Mode::File => concat!(
+            "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits",
+            " · F3 HISTORY · F5 hover · F6 definition · F8 uses",
+            " · F10 outline · F9 complete · F7 editor",
+        )
+        .to_string(),
     }
 }
 
@@ -3726,6 +3800,13 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
             &[]
         };
     for (i, ln) in open.lines.iter().enumerate().skip(top).take(h) {
+        // **The line's own tokens, found once for the line rather than scanned
+        // for out of the whole file once per character.** `syntax_role`'s doc
+        // claimed the former and the code did the latter: this file yields
+        // 28,330 tokens from rust-analyzer, and the inner loop asked all of
+        // them about every cell it painted. The answer is ordered by line, so
+        // the slice is a binary search.
+        let line_tokens = tokens_on_line(tokens, i);
         let row_chars: Vec<char> = ln.chars().collect();
         let (sel_a, sel_b) = match sel {
             Some((a, b)) if i >= a.0 && i <= b.0 => (
@@ -3795,7 +3876,7 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
                 // compiler objects, and syntax colour is what the text *is*.
                 // A comment under the cursor is drawn as the cursor, because
                 // losing the cursor is worse than losing the colour.
-                skin.palette.style(syntax_role(tokens, i, idx))
+                skin.palette.style(syntax_role(line_tokens, idx))
             };
             spans.push(Span::styled(glyph, style));
             x += gwid;
@@ -6927,18 +7008,162 @@ mod tests {
     /// A server-supplied range wins over the word rule, because the server is
     /// the one that knows the language. Here it replaces more than an
     /// identifier would.
+    ///
+    /// The origin is the cursor, which is the condition the range is good
+    /// under: see the test below for what happens when it is not.
     #[test]
     fn a_server_range_wins_over_the_word_before_the_cursor() {
         let mut v = with_word("a.b");
         let mut item = candidate("total", "total", "total");
         // Columns 12..15 are `a.b`, which no identifier rule would take whole.
         item.replace = Some((12, 15));
+        let at = (0, v.open.as_ref().expect("open").col);
         v.lsp.popup = Some(Popup {
             items: vec![item],
+            origin: at,
             ..Popup::default()
         });
         v.accept_completion();
         assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { total");
+    }
+
+    /// **And it stops winning the moment the cursor leaves the position it was
+    /// computed at**, which is the common case rather than the corner: the list
+    /// narrows as somebody types and is not asked again, so by the time they
+    /// press Enter they are three letters past where the server answered.
+    ///
+    /// Certified against rust-analyzer 1.94.1: a completion after a dot comes
+    /// back with an *empty* replace range at the request position. Applying
+    /// that after three more letters inserts the candidate and leaves the three
+    /// behind, so `c.pus` accepted as `push` produced `c.pushpus`. The word
+    /// before the cursor is the honest range once the cursor has moved -- the
+    /// same fallback a server naming no range already gets.
+    #[test]
+    fn a_server_range_is_dropped_once_the_cursor_has_moved_past_it() {
+        let mut v = with_word("c.pus");
+        let mut item = candidate("push", "push", "push");
+        // What rust-analyzer actually sends: an empty range at the point the
+        // question was asked, which was three characters ago.
+        item.replace = Some((14, 14));
+        v.lsp.popup = Some(Popup {
+            items: vec![item],
+            // Asked just after the dot; the cursor is now at 17.
+            origin: (0, 14),
+            typed: "pus".to_string(),
+            ..Popup::default()
+        });
+        v.accept_completion();
+        assert_eq!(
+            v.open.as_ref().unwrap().lines[0],
+            "fn main() { c.push",
+            "the three letters already typed must be replaced, not kept"
+        );
+        assert_eq!(v.open.as_ref().unwrap().col, 18);
+    }
+
+    /// **Both spellings of the completion key reach the page, and the second
+    /// one did not for a fortnight.**
+    ///
+    /// `takes_key` admitted exactly one `Ctrl` chord, so the `Ctrl+space` arm
+    /// below it was unreachable and the key did nothing at all -- while the
+    /// help row, the module header and a commit message all named it. Relaxing
+    /// the predicate alone would have been worse: the blanket `Ctrl` arm in
+    /// `handle_key` would have *saved the file* when somebody asked for a
+    /// completion. So this asserts both halves.
+    #[test]
+    fn ctrl_space_asks_for_a_completion_and_does_not_save() {
+        let mut v = with_word("pu");
+        let chord = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert!(takes_key(&v, chord), "the chord never reached the page");
+        assert_eq!(
+            handle_key(&mut v, chord),
+            CodeAction::Complete,
+            "Ctrl+space must ask, not save"
+        );
+        // And the one chord that does save still does. The buffer has to be
+        // dirty for a save to be a write rather than a sentence.
+        v.open.as_mut().expect("open").dirty = true;
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(matches!(handle_key(&mut v, save), CodeAction::Save(_)));
+    }
+
+    /// **Completion refuses outside the editor, because its popup has no exit
+    /// there.** `popup_key` is reached only from `edit_key`, so a list opened
+    /// from the tree or from a read-only document covered the code with
+    /// nothing able to dismiss it, and `Esc` closed the whole page instead.
+    #[test]
+    fn a_completion_asked_for_outside_the_editor_refuses_in_words() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        assert!(!v.editing(), "the fixture must be a viewer, not an editor");
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(9))),
+            CodeAction::FocusChanged
+        );
+        assert!(
+            v.lsp.popup.is_none(),
+            "a popup opened with no way to close it"
+        );
+        let note = lsp_line(&v).expect("a sentence");
+        assert!(note.contains("press Enter to edit"), "{note}");
+
+        // And once the document is being edited it asks, as it always did.
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.editing());
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(9))), CodeAction::Complete);
+    }
+
+    /// **Opening a file drops every answer about the last one.** The popup is
+    /// the one that could do damage rather than merely mislead: it inserts into
+    /// the buffer, so a list left standing across a file switch would put the
+    /// old file's candidate into the new file's text.
+    #[test]
+    fn opening_a_file_drops_the_answers_about_the_previous_one() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push", "push", "push")],
+            ..Popup::default()
+        });
+        v.lsp.places = Some(Places {
+            about: "references to widget".into(),
+            rows: vec![Place {
+                label: "src/lib.rs:1".into(),
+                rel: "src/lib.rs".into(),
+                line: 0,
+                col: 0,
+            }],
+            at: 0,
+        });
+        v.lsp.hover = Some(HoverPopup {
+            lines: vec!["fn push".into()],
+            scroll: 0,
+        });
+        v.lsp.tokens = vec![Token {
+            line: 0,
+            start: 0,
+            end: 2,
+            kind: TokenKind::Keyword,
+        }];
+        v.lsp.tokens_for = Some("src/lib.rs".into());
+
+        open_file(&mut v, "src/other.rs", &["fn other() {}"]);
+
+        assert!(
+            v.lsp.popup.is_none(),
+            "a completion for the old file survived"
+        );
+        assert!(
+            v.lsp.places.is_none(),
+            "a places panel about the old file survived"
+        );
+        assert!(v.lsp.hover.is_none(), "a hover about the old file survived");
+        assert!(v.lsp.tokens.is_empty(), "the old file's colours survived");
+        assert_eq!(v.lsp.tokens_for, None);
     }
 
     /// **The popup owns six keys and no more.** One that swallowed Backspace

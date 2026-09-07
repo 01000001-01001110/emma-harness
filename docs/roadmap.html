@@ -211,6 +211,36 @@
     reader learning the mechanism is handed a caveat they cannot act on.
   </p>
 
+  <h3>Six of the fourteen theme colours are not pinned to their values</h3>
+
+  <p>
+    <code>the_built_in_theme_renders_exactly_what_shipped</code> in
+    <code>palette.rs</code> is a literal table of role, truecolor, 256 and 16,
+    and it stops at <code>Ground</code>. The six source-code roles that landed
+    on 2026-09-06 (<code>Comment</code>, <code>Keyword</code>,
+    <code>Str</code>, <code>Number</code>, <code>Type</code> and
+    <code>Func</code>) are in no such table. The other assertion,
+    <code>the_builtin_theme_is_what_emma_renders_today</code> in
+    <code>theme.rs</code>, walks all fourteen roles but compares the live
+    <code>Palette</code> against <code>BUILTIN</code>, and
+    <code>palette.rs</code> reads <code>BUILTIN</code>, so that comparison pins
+    the fidelity shape rather than any colour. Its literal receipts cover seven
+    of the original eight.
+  </p>
+
+  <p>
+    The consequence is narrow and quiet: a mistyped hex in <code>BUILTIN</code>
+    ships green. Nothing else depends on those six values, so the failure is a
+    wrong colour rather than a broken build, which is exactly the class the
+    literal table was written to catch for the first eight.
+    <span class="chip unv">unverified</span>: nobody has checked whether the six
+    hexes on screen are the six in the source.
+    <em>What would settle it:</em> six more rows in the <code>palette.rs</code>
+    table, or six literal <code>assert_eq!(BUILTIN.rgb(&hellip;), (&hellip;))</code>
+    lines beside the seven in <code>theme.rs</code>. Either is a few minutes.
+  </p>
+  <span class="src">crates/emma/src/term/palette.rs &mdash; <code>the_built_in_theme_renders_exactly_what_shipped</code>; crates/emma/src/term/theme.rs &mdash; <code>BUILTIN</code>, <code>the_builtin_theme_is_what_emma_renders_today</code></span>
+
   <h3><code>reanchor</code> can send the cursor answer to the wrong reader</h3>
 
   <p>

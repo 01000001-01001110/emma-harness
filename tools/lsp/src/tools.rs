@@ -1,8 +1,8 @@
-//! The four tools, and the one path every position-based question takes.
+//! The seven tools, and the two paths a position-based question takes.
 //!
 //! Each tool is a thin shell — validate, contain, locate, ask, render — because
 //! everything hard is in the other modules and repeating any of it here is how
-//! four tools come to disagree about containment.
+//! seven tools come to disagree about containment.
 //!
 //! **The shared shape.** `FindReferences`, `GoToDefinition` and `Hover` take the
 //! same three arguments: a file, a 1-based line, and the symbol's name. See
@@ -11,6 +11,14 @@
 //! wrong answer about the symbol next door. The shape also means `Grep` output
 //! feeds straight in, which is the actual workflow: grep to find candidate
 //! lines, then ask the compiler which of them is real.
+//!
+//! **And the second shape, for the two that ask about a *point*.**
+//! `Completion` and `SignatureHelp` take `after` instead of `symbol`: the text
+//! immediately before the place being asked about, with the cursor put at its
+//! end. A completion after a dot has no symbol to name — `config.` is not an
+//! identifier and the line does not compile yet — so naming a symbol would be
+//! the wrong question. The same substring search backs both, so the same three
+//! refusals apply.
 //!
 //! **What every one of them does before asking.** Resolve the path through
 //! `tools/fs`'s containment, find the language for the file, read it
@@ -38,7 +46,7 @@ use crate::render;
 // The shared preamble
 //
 // Containment, the language gate, the read, the position, and the sync — in one
-// place so that four tools cannot each get a different part of it wrong.
+// place so that seven tools cannot each get a different part of it wrong.
 // ---------------------------------------------------------------------------
 
 /// Everything a tool needs after the preamble has run.
@@ -112,6 +120,87 @@ async fn prepare_at(
     let prepared = prepare(pool, ctx, tool, args_v).await?;
     let (position, _) = doc::locate(&prepared.text, line, &symbol, occurrence)?;
     Ok((prepared, position))
+}
+
+/// The preamble plus a cursor *after* a named piece of text.
+///
+/// **Completion and signature help are questions about a point, not about a
+/// symbol**, and the difference is the whole reason this exists beside
+/// [`prepare_at`]. `config.` has no symbol to name -- the useful position is one
+/// character past a dot, on a line that does not compile yet. So the argument is
+/// the text immediately before the point, and the cursor goes at its end.
+///
+/// [`doc::locate`] does a plain substring search, which is what makes this work
+/// for `config.` and `take(1, ` as well as for a bare name, and its refusals --
+/// not on that line, ambiguous without `occurrence` -- are the ones already
+/// written and already understood.
+async fn prepare_after(
+    pool: &Pool,
+    ctx: &ToolCtx,
+    tool: &str,
+    args_v: &Value,
+) -> Result<(Prepared, Position), ToolError> {
+    let line = args::req_u64(args_v, tool, "line")?;
+    let after = args::req_str(args_v, tool, "after")?.to_string();
+    let occurrence = args::opt_u64(args_v, tool, "occurrence")?;
+
+    let prepared = prepare(pool, ctx, tool, args_v).await?;
+    let (start, text) = doc::locate(&prepared.text, line, &after, occurrence)?;
+    // Past the end of the match, in the same UTF-16 units the position is in.
+    // Counting the argument's own units rather than re-measuring the line,
+    // because the two agree by construction and only one of them is in hand.
+    let width: u32 = after.chars().map(|c| c.len_utf16() as u32).sum();
+    let _ = text;
+    Ok((
+        prepared,
+        Position {
+            line: start.line,
+            character: start.character + width,
+        },
+    ))
+}
+
+/// The arguments the two point tools share, and their schema.
+const CURSOR_KEYS: &[&str] = &["file_path", "line", "after", "occurrence"];
+
+fn cursor_schema(after: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." },
+            "line": { "type": "integer", "minimum": 1, "description": "1-based line number the point is on." },
+            "after": { "type": "string", "description": after },
+            "occurrence": { "type": "integer", "minimum": 1, "description": "Which occurrence on the line, 1-based. Only needed when the text appears more than once." }
+        },
+        "required": ["file_path", "line", "after"],
+        "additionalProperties": false,
+    })
+}
+
+fn validate_cursor_args(tool: &str, args_v: &Value) -> Result<(), ToolError> {
+    args::deny_unknown(args_v, tool, CURSOR_KEYS)?;
+    args::req_str(args_v, tool, "file_path")?;
+    let line = args::req_u64(args_v, tool, "line")?;
+    if line == 0 {
+        return Err(ToolError::BadArguments(format!(
+            "{tool}.line is 1-based; there is no line 0"
+        )));
+    }
+    if args::req_str(args_v, tool, "after")?.is_empty() {
+        // An empty string matches at column 0 of every line, which would be a
+        // confident answer about the start of the line rather than about the
+        // point the caller meant.
+        return Err(ToolError::BadArguments(format!(
+            "{tool}.after is empty; name the text immediately before the point you are asking \
+             about"
+        )));
+    }
+    if let Some(0) = args::opt_u64(args_v, tool, "occurrence")? {
+        return Err(ToolError::BadArguments(format!(
+            "{tool}.occurrence is 1-based; there is no occurrence 0"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether a path is YAML, so the Ansible refusal can be the specific one.
@@ -387,7 +476,7 @@ impl GoToDefinition {
 // ---------------------------------------------------------------------------
 // Hover
 //
-// The type and the doc comment. The cheapest of the four and the one that most
+// The type and the doc comment. The cheapest of them all and the one that most
 // often replaces reading a file.
 // ---------------------------------------------------------------------------
 
@@ -466,8 +555,8 @@ impl Hover {
 // ---------------------------------------------------------------------------
 // DocumentSymbols
 //
-// The shape of a file without reading it. The only one of the four that needs
-// no position, which is why it is also the one to reach for first in an
+// The shape of a file without reading it. One of only two that need no
+// position, which is why it is also the one to reach for first in an
 // unfamiliar file.
 // ---------------------------------------------------------------------------
 
@@ -546,6 +635,164 @@ impl DocumentSymbols {
 }
 
 // endregion: DocumentSymbols
+
+// region: Completion
+// ---------------------------------------------------------------------------
+// Completion
+//
+// What can be typed here. The only tool of the seven whose answer is a *ranked*
+// list, which is why it is capped far lower than the others and why its order is
+// never touched.
+// ---------------------------------------------------------------------------
+
+pub struct Completion {
+    pool: Arc<Pool>,
+}
+
+impl Completion {
+    pub fn new(pool: Arc<Pool>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for Completion {
+    fn name(&self) -> &'static str {
+        "Completion"
+    }
+
+    fn description(&self) -> &str {
+        include_str!("descriptions/completion.md")
+    }
+
+    fn input_schema(&self) -> Value {
+        cursor_schema(
+            "The text on that line immediately before the point you are asking about. Include \
+             the dot to ask for a value's members, as in \"config.\". The line need not compile.",
+        )
+    }
+
+    fn meta(&self) -> ToolMeta {
+        READ_ONLY
+    }
+
+    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
+        validate_cursor_args("Completion", args_v)
+    }
+
+    async fn invoke(
+        &self,
+        ctx: &ToolCtx,
+        args_v: Value,
+    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+        Ok(self.run(ctx, args_v).await)
+    }
+}
+
+impl Completion {
+    async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
+        self.validate_args(&args_v)?;
+        let (prepared, position) = prepare_after(&self.pool, ctx, "Completion", &args_v).await?;
+        let Answer {
+            value,
+            readiness,
+            health,
+        } = prepared
+            .client
+            .request(
+                "textDocument/completion",
+                text_document_position(&prepared.file, position),
+            )
+            .await?;
+        Ok(render::completions(
+            prepared.client.server(),
+            readiness,
+            health.as_deref(),
+            &value,
+        ))
+    }
+}
+
+// endregion: Completion
+
+// region: SignatureHelp
+// ---------------------------------------------------------------------------
+// SignatureHelp
+//
+// The parameters of the call the point is inside. Distinct from `Hover` on the
+// callee, because the answer here knows which argument is being typed and hover
+// cannot.
+// ---------------------------------------------------------------------------
+
+pub struct SignatureHelp {
+    pool: Arc<Pool>,
+}
+
+impl SignatureHelp {
+    pub fn new(pool: Arc<Pool>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for SignatureHelp {
+    fn name(&self) -> &'static str {
+        "SignatureHelp"
+    }
+
+    fn description(&self) -> &str {
+        include_str!("descriptions/signature_help.md")
+    }
+
+    fn input_schema(&self) -> Value {
+        cursor_schema(
+            "The text on that line immediately before the point you are asking about, usually \
+             the open bracket and any arguments already typed, as in \"take(1, \".",
+        )
+    }
+
+    fn meta(&self) -> ToolMeta {
+        READ_ONLY
+    }
+
+    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
+        validate_cursor_args("SignatureHelp", args_v)
+    }
+
+    async fn invoke(
+        &self,
+        ctx: &ToolCtx,
+        args_v: Value,
+    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+        Ok(self.run(ctx, args_v).await)
+    }
+}
+
+impl SignatureHelp {
+    async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
+        self.validate_args(&args_v)?;
+        let (prepared, position) = prepare_after(&self.pool, ctx, "SignatureHelp", &args_v).await?;
+        let Answer {
+            value,
+            readiness,
+            health,
+        } = prepared
+            .client
+            .request(
+                "textDocument/signatureHelp",
+                text_document_position(&prepared.file, position),
+            )
+            .await?;
+        Ok(render::signatures(
+            prepared.client.server(),
+            readiness,
+            health.as_deref(),
+            &value,
+        ))
+    }
+}
+
+// endregion: SignatureHelp
 
 // region: Diagnostics
 // ---------------------------------------------------------------------------

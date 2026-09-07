@@ -122,7 +122,7 @@ struct Entry {
 pub struct Theme {
     <span class="c">/// Indexed by [`slot`], so the array order is the `Role` declaration order</span>
     <span class="c">/// and nothing else may assume it.</span>
-    roles: [Entry; 8],
+    roles: [Entry; 14],
     <span class="c">/// `[foreground, background]`. Both halves are always present, which is the</span>
     <span class="c">/// whole reason a background is expressible at all.</span>
     chip: [Entry; 2],
@@ -131,8 +131,8 @@ pub struct Theme {
   <span class="src">crates/emma/src/term/theme.rs — <code>Entry</code>, <code>Theme</code>, <code>slot</code></span>
 
   <p>
-    <code>slot(role)</code> is a <code>const fn</code> mapping the eight roles
-    onto array indices, and the field comment insists nothing else may assume
+    <code>slot(role)</code> is a <code>const fn</code> mapping the fourteen
+    roles onto array indices, and the field comment insists nothing else may assume
     the order. Six accessors read it: <code>rgb</code>, <code>indexed</code>,
     <code>ansi16</code>, <code>pair</code>, and the private
     <code>halves</code>/<code>halves_mut</code>. <code>Pair</code> is a
@@ -215,10 +215,25 @@ pub struct Theme {
   <span class="src">crates/emma/src/term/theme.rs — <code>apply_roles</code>, <code>ROLE_NAMES</code>, <code>SETTABLE</code></span>
 
   <p>
-    <code>ROLE_NAMES</code> lists all eight names including the refused one, and
-    <code>SETTABLE</code> lists the seven that work. The split exists so that
-    <em>&ldquo;a typo of <code>text</code> should be told about
+    <code>ROLE_NAMES</code> lists all fourteen names including the refused one,
+    and <code>SETTABLE</code> lists the thirteen that work. The split exists so
+    that <em>&ldquo;a typo of <code>text</code> should be told about
     <code>text</code>, not about seven names that do not include it.&rdquo;</em>
+    The doc comment is quoted as it stands, and the number inside it is the
+    pre-2026-09-06 count: six source-code roles landed that day and nobody
+    updated the sentence. What it argues for is unchanged.
+    <strong>A theme that names none of the six keeps the built-in six</strong>,
+    so every theme file already written stays valid and gains readable code for
+    nothing.
+    <span class="chip unv">unverified</span> for that last claim: the fallback
+    is <code>apply_roles</code> starting from <code>BUILTIN</code> and only
+    overwriting what a file names, which is the same mechanism the original
+    seven use, but no test writes <code>comment</code> (or any of the other
+    five) into a theme file and reads the colour back out.
+    <em>What would settle it:</em> a loader test that sets
+    <code>roles.comment</code> in a temporary theme and asserts
+    <code>Palette::color(Role::Comment)</code> changed, plus one that sets none
+    of the six and asserts it did not.
     <span class="chip test">tested</span> twice:
     <code>a_theme_cannot_colour_ordinary_text</code> checks the refusal is
     spoken and that the rest of the file still applied, and

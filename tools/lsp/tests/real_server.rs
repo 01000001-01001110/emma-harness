@@ -25,7 +25,8 @@ use std::time::Duration;
 use emma_tool_api::Tool;
 use emma_tools_lsp::client::Readiness;
 use emma_tools_lsp::{
-    server, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+    server, Completion, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+    SignatureHelp,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -736,31 +737,56 @@ async fn a_real_server_marks_the_argument_the_cursor_is_in() {
     client.wait_ready().await;
 
     // Two parameters, so "which one is active" has a wrong answer available.
-    let probe =
-        "pub fn take(a: u8, b: u8) -> u8 { a + b }\npub fn probe() -> u8 {\n    take(1, 2)\n}\n";
-    sandbox.write("src/sig.rs", probe);
-    let path = sandbox.canonical().join("src/sig.rs");
-    client.sync_document(&path, probe);
+    //
+    // **Appended to `lib.rs`, and that is the whole point of this paragraph.**
+    // Until 2026-09-06 this wrote `src/sig.rs`, which `LIB_RS` never declares
+    // with a `pub mod`, so rust-analyzer considered it no part of the crate and
+    // offered nothing — and the test took an `else { eprintln!(); return; }` and
+    // reported green having asserted nothing at all. That is the identical
+    // defect the completion probe above records, in the same file, found the
+    // same way. Certified 2026-09-06 against rust-analyzer 1.94.1: appending to
+    // `lib.rs` makes the server answer, and the escape hatch below is now
+    // unreachable on a machine with a working server.
+    let probe = format!(
+        "{LIB_RS}
+pub fn take(a: u8, b: u8) -> u8 {{ a + b }}
+pub fn sig_probe() -> u8 {{
+    take(1, 2)
+}}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+    let line = probe
+        .lines()
+        .position(|l| l.trim() == "take(1, 2)")
+        .expect("the probe line") as u32;
 
-    // Character 12 on line 2 is inside the call, after the comma, so the
-    // second argument is the active one.
+    // Character 12 is `    take(1, 2)` counted to just before the `2`: inside
+    // the call and past the comma, so the second argument is the active one.
     let answer = client
         .request(
             "textDocument/signatureHelp",
             serde_json::json!({
                 "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) },
-                "position": { "line": 2, "character": 12 },
+                "position": { "line": line, "character": 12 },
             }),
         )
         .await
         .expect("the server answered");
 
     let Some((sigs, active)) = emma_tools_lsp::render::parse_signatures(&answer.value) else {
-        // Said rather than asserted away: a server build that does not offer
-        // signature help here is a fact about the machine, and the fixture
-        // tests still cover the parsing.
-        eprintln!("real signature help: the server offered none for this position");
-        return;
+        // **Not an escape any more, and the difference is the point.** A server
+        // that offers no signature help inside a call in a file it has indexed
+        // is a finding, not a fact about the machine — the machine question was
+        // already answered by `fixture()` returning `Some`. Silence here used to
+        // be a green pass.
+        panic!(
+            "the real server offered no signature help inside a call on line {line}; \
+             raw answer: {}",
+            answer.value
+        );
     };
     eprintln!(
         "real signature help: active={active} {:?}",
@@ -777,6 +803,102 @@ async fn a_real_server_marks_the_argument_the_cursor_is_in() {
         sig.active_parameter,
         Some(1),
         "the cursor is past the comma, so the second argument is active: {sig:?}"
+    );
+}
+
+/// **The two point tools as tools, against the real server** — the argument
+/// shape, the containment, the sync and the rendering, in the path the model
+/// actually calls.
+///
+/// The tests above drive `client.request` directly, which certifies the wire
+/// and skips everything this crate does around it. What is only checked here is
+/// `prepare_after`: it finds `after` in the file on disk, puts the cursor at its
+/// **end** in UTF-16 units, and hands that to a server that will happily answer
+/// a question about any other column. `tests/tools.rs` proves the number sent is
+/// the one intended; only a real server can say that the number is the one that
+/// produces the right answer.
+///
+/// Both probes are appended to `lib.rs` for the reason the two tests above
+/// record: rust-analyzer offers nothing at all for a file the crate's module
+/// tree does not declare.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_point_tools_answer_for_real() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    let probe = format!(
+        "{LIB_RS}
+pub fn take(a: u8, b: u8) -> u8 {{ a + b }}
+
+pub fn point_probe(c: Config) -> u8 {{
+    c.name;
+    take(1, 2)
+}}
+"
+    );
+    sandbox.write("src/lib.rs", &probe);
+    // 1-based, as the tools take them.
+    let line_of = |needle: &str| {
+        probe
+            .lines()
+            .position(|l| l.trim() == needle)
+            .unwrap_or_else(|| panic!("no {needle:?} line in the probe")) as u64
+            + 1
+    };
+
+    // `after: "c."` puts the cursor one unit past the dot. Asked at the *start*
+    // of the match instead, rust-analyzer answers with every name in scope —
+    // a full, well-ordered, confident list of the wrong completions.
+    let out = Completion::new(pool.clone())
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/lib.rs", "line": line_of("c.name;"), "after": "c." }),
+        )
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!("--- Completion ---\n{}", out.content);
+    assert!(
+        !out.content.contains("No completions found"),
+        "the real server offered nothing after a dot on a known type: {}",
+        out.content
+    );
+    // The fixture's own field, which is the one item this can name without
+    // depending on the standard library's shape. `field:` and not some other
+    // kind: a cursor at the start of `c.` would return locals and functions.
+    assert!(
+        out.content.contains("field: name"),
+        "the member list is not the one for a `Config`, which is what a cursor \
+         at the wrong column produces: {}",
+        out.content
+    );
+
+    // `after: "take(1, "` puts the cursor where the second argument is typed.
+    let out = SignatureHelp::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/lib.rs", "line": line_of("take(1, 2)"), "after": "take(1, " }),
+        )
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!("--- SignatureHelp ---\n{}", out.content);
+    assert!(
+        out.content.contains("> fn take(a: u8, b: u8) -> u8"),
+        "the active signature is not the function being called: {}",
+        out.content
+    );
+    assert!(
+        out.content.contains("argument 2: b: u8"),
+        "the cursor is past the comma, so the second argument is the one being \
+         typed — a cursor at the start of `take(1, ` would say the first: {}",
+        out.content
     );
 }
 

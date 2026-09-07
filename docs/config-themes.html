@@ -210,13 +210,22 @@ pub fn load(
 <pre><code>/// Every role name a file may use, including the one that is refused — a typo
 /// of `text` should be told about `text`, not about seven names that do not
 /// include it.
-const ROLE_NAMES: [&amp;str; 8] = [
-    "text", "dim", "ok", "err", "warn", "info", "accent", "ground",
+const ROLE_NAMES: [&amp;str; 14] = [
+    "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
+    "number", "type", "function",
 ];
 
 /// The settable roles, by the name a file spells them with.
-const SETTABLE: [(&amp;str, Role); 7] = [
+const SETTABLE: [(&amp;str, Role); 13] = [
     ("dim", Role::Dim),
+    // A theme that names none of these keeps the built-in six, so every theme
+    // already written stays valid and gains readable code for free.
+    ("comment", Role::Comment),
+    ("keyword", Role::Keyword),
+    ("string", Role::Str),
+    ("number", Role::Number),
+    ("type", Role::Type),
+    ("function", Role::Func),
     ("ok", Role::Ok),
     ("err", Role::Err),
     ("warn", Role::Warn),
@@ -232,9 +241,24 @@ const MAX_NOTICES: usize = 5;</code></pre>
   <span class="src">crates/emma/src/term/theme.rs — <code>ROLE_NAMES</code>, <code>SETTABLE</code>, <code>MAX_NOTICES</code>, <code>RESERVED</code></span>
 
   <p>
-    Eight role names exist and seven may be set. The eighth sits in the list so a
-    person who misspells <code>text</code> is told about <code>text</code>,
-    not a list of seven other names.
+    Fourteen role names exist and thirteen may be set. <code>text</code> sits in
+    the list without being settable, so a person who misspells it is told about
+    <code>text</code> rather than about a list of names that does not contain
+    the one they meant. The doc comment above still says <em>&ldquo;seven
+    names&rdquo;</em>; that was the count until 2026-09-06, when the six
+    source-code roles landed and the sentence was not updated with them.
+  </p>
+
+  <p>
+    The six that arrived that day are <code>comment</code>, <code>keyword</code>,
+    <code>string</code>, <code>number</code>, <code>type</code> and
+    <code>function</code>, and they colour source on the Code page from what the
+    language server said each run of characters is. A theme naming none of them
+    keeps the built-in six, so a theme file written before that date is still
+    valid and gains coloured code without being touched. Two of the spellings
+    differ from the <code>Role</code> they set: a file writes
+    <code>string</code> for <code>Role::Str</code> and <code>function</code> for
+    <code>Role::Func</code>.
   </p>
 
   <p>

@@ -260,12 +260,18 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
         };
 
         let Some(request) = request else {
-            // The debounce expired: send the newest buffer, once.
+            // The debounce expired: send the newest buffer, once, and ask what
+            // it is made of. **The colour question belongs here rather than on
+            // the keystroke**: it needs the server to have the current text, so
+            // asking it earlier meant flushing the debounce, which is how a
+            // three-hundred-millisecond debounce came to send one `didChange`
+            // and one full token request per character typed.
             deadline = None;
             if let (Some((rel, text)), Some(o)) = (pending.take(), open.as_ref()) {
                 if rel == o.rel {
                     *o.text.lock().expect("buffer") = text.clone();
                     o.client.sync_document(&o.path, &text);
+                    ask_tokens(o, &sink, &text);
                 }
             }
             continue;
@@ -380,12 +386,22 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
                             client.request("textDocument/references", params),
                         )
                         .await;
-                        if let Ok(Ok(a)) = result {
-                            sink(LspUpdate::Places {
+                        match result {
+                            Ok(Ok(a)) => sink(LspUpdate::Places {
                                 path,
                                 about: format!("references to {about}"),
                                 rows: reference_places(&a.value, &root),
-                            });
+                            }),
+                            // Named, not swallowed, the same as `ask`: a key
+                            // that draws nothing reads as "there are none".
+                            Ok(Err(e)) => sink(LspUpdate::Note {
+                                path,
+                                text: e.detail().to_string(),
+                            }),
+                            Err(_) => sink(LspUpdate::Note {
+                                path,
+                                text: timed_out(),
+                            }),
                         }
                     });
                 }
@@ -404,47 +420,37 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
                             client.request("textDocument/documentSymbol", params),
                         )
                         .await;
-                        if let Ok(Ok(a)) = result {
-                            sink(LspUpdate::Places {
+                        match result {
+                            Ok(Ok(a)) => sink(LspUpdate::Places {
                                 about: format!("symbols in {path}"),
                                 rows: symbol_places(&a.value, &path),
                                 path,
-                            });
+                            }),
+                            Ok(Err(e)) => sink(LspUpdate::Note {
+                                path,
+                                text: e.detail().to_string(),
+                            }),
+                            Err(_) => sink(LspUpdate::Note {
+                                path,
+                                text: timed_out(),
+                            }),
                         }
                     });
                 }
             }
             Request::Highlight { rel, text } => {
+                // **Only when nothing is pending.** A buffer waiting out the
+                // debounce will be sent, and answered about, the moment it
+                // expires; asking now would mean flushing it, and flushing it
+                // on every keystroke is the debounce not existing. The page
+                // posts this on open and on every change, so the open case
+                // colours immediately and the typing case colours when the
+                // typing stops.
+                if pending.is_some() {
+                    continue;
+                }
                 if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
-                    sync_now(o, &text, &mut pending, &mut deadline);
-                    let client = o.client.clone();
-                    let sink = sink.clone();
-                    let uri = doc::to_uri(&o.path);
-                    let path = rel.clone();
-                    let buffer = text.clone();
-                    tokio::spawn(async move {
-                        let legend = client.capabilities().semantic_tokens;
-                        if legend.is_empty() {
-                            // No legend means the numbers in the answer are
-                            // unnamed, and colouring by an order this client
-                            // guessed is worse than drawing plain text.
-                            return;
-                        }
-                        let params = json!({ "textDocument": { "uri": uri } });
-                        let result = tokio::time::timeout(
-                            ASK_TIMEOUT,
-                            client.request("textDocument/semanticTokens/full", params),
-                        )
-                        .await;
-                        if let Ok(Ok(a)) = result {
-                            sink(LspUpdate::Tokens {
-                                path,
-                                items: emma_tools_lsp::render::parse_tokens(
-                                    &a.value, &legend, &buffer,
-                                ),
-                            });
-                        }
-                    });
+                    ask_tokens(o, &sink, &text);
                 }
             }
             Request::Signature {
@@ -572,6 +578,54 @@ fn sync_now(
     o.client.sync_document(&o.path, text);
 }
 
+/// The sentence for a request that did not come back with an answer.
+///
+/// **`ask` said this and the two requests that spawn their own tasks did not**,
+/// so a references or a symbols question that timed out or was refused drew
+/// nothing at all -- the silence this module's header names as the failure it
+/// exists to prevent. One function now, because "the person pressed a key and
+/// is owed an answer" is one rule that was being written out per call site.
+fn timed_out() -> String {
+    format!(
+        "the language server did not answer within {}s; it is probably still indexing",
+        ASK_TIMEOUT.as_secs()
+    )
+}
+
+/// Ask what every run of characters in the file is, for colour., which is the whole
+/// of the debounce's correctness: the answer's positions index the version the
+/// server holds, so asking about a buffer it has not been sent produces colour
+/// half a line out. `parse_tokens` drops a token past the end of the buffer it
+/// is given, which contains the damage but does not prevent it.
+fn ask_tokens(o: &Open, sink: &Sink, text: &str) {
+    let client = o.client.clone();
+    let sink = sink.clone();
+    let uri = doc::to_uri(&o.path);
+    let path = o.rel.clone();
+    let buffer = text.to_string();
+    tokio::spawn(async move {
+        let legend = client.capabilities().semantic_tokens;
+        if legend.is_empty() {
+            // No legend means the numbers in the answer are unnamed, and
+            // colouring by an order this client guessed is worse than drawing
+            // plain text.
+            return;
+        }
+        let params = json!({ "textDocument": { "uri": uri } });
+        let result = tokio::time::timeout(
+            ASK_TIMEOUT,
+            client.request("textDocument/semanticTokens/full", params),
+        )
+        .await;
+        if let Ok(Ok(a)) = result {
+            sink(LspUpdate::Tokens {
+                path,
+                items: emma_tools_lsp::render::parse_tokens(&a.value, &legend, &buffer),
+            });
+        }
+    });
+}
+
 /// Which shape the answer is read back in.
 enum Answer {
     Hover,
@@ -657,10 +711,7 @@ fn ask(
             // answer, and "it did not come back" is one.
             Err(_) => LspUpdate::Note {
                 path: rel,
-                text: format!(
-                    "the language server did not answer within {}s; it is probably still indexing",
-                    ASK_TIMEOUT.as_secs()
-                ),
+                text: timed_out(),
             },
         };
         sink(update);
@@ -1128,6 +1179,11 @@ mod tests {
     struct Fake {
         publishes: Option<Vec<Value>>,
         answers: Vec<(String, Value)>,
+        /// Methods this server answers with a JSON-RPC `error` rather than a
+        /// result. A refusal and an empty result are different answers, and a
+        /// client that draws them the same says "there are none" when the truth
+        /// is "it would not say".
+        refusals: Vec<(String, String)>,
         /// Spell a published URI the way a real rust-analyzer does — the drive
         /// letter lower-cased. Without this the fake echoes the exact string it
         /// was handed, and a lookup keyed on the wrong spelling is green.
@@ -1139,6 +1195,7 @@ mod tests {
             Self {
                 publishes: None,
                 answers: Vec::new(),
+                refusals: Vec::new(),
                 respell: false,
             }
         }
@@ -1150,6 +1207,16 @@ mod tests {
 
         fn answering(mut self, method: &str, result: Value) -> Self {
             self.answers.push((method.to_string(), result));
+            self
+        }
+
+        /// Refuse a method the way a real server does when it cannot answer:
+        /// a JSON-RPC `error`, not a null result. The two are different
+        /// answers and a client that renders them the same is telling somebody
+        /// "there are none" when the truth is "it would not say".
+        fn refusing(mut self, method: &str, message: &str) -> Self {
+            self.refusals
+                .push((method.to_string(), message.to_string()));
             self
         }
 
@@ -1172,6 +1239,7 @@ mod tests {
             let log = sent.clone();
             let publishes = self.publishes.clone();
             let answers = self.answers.clone();
+            let refusals = self.refusals.clone();
             let respell = self.respell;
             tokio::spawn(async move {
                 let mut reader = BufReader::new(server_read);
@@ -1224,12 +1292,20 @@ mod tests {
                         continue;
                     }
                     if let Some(id) = id {
-                        let result = answers
-                            .iter()
-                            .find(|(m, _)| *m == method)
-                            .map(|(_, r)| r.clone())
-                            .unwrap_or(Value::Null);
-                        let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                        let reply =
+                            if let Some((_, why)) = refusals.iter().find(|(m, _)| *m == method) {
+                                json!({
+                                    "jsonrpc": "2.0", "id": id,
+                                    "error": { "code": -32603, "message": why }
+                                })
+                            } else {
+                                let result = answers
+                                    .iter()
+                                    .find(|(m, _)| *m == method)
+                                    .map(|(_, r)| r.clone())
+                                    .unwrap_or(Value::Null);
+                                json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                            };
                         if proto::write_message(&mut server_write, &reply)
                             .await
                             .is_err()
@@ -1450,6 +1526,15 @@ mod tests {
     /// The debounce, which is the whole reason the clock lives in the task:
     /// five keystrokes' worth of buffers collapse into one notification, and it
     /// is the newest one.
+    ///
+    /// **Every keystroke posts a `Change` and then a `Highlight`, because that
+    /// is what the shell posts** -- and the first version of this test posted
+    /// `Change` alone, a shape `app.rs` never produces. It stayed green for a
+    /// week while the debounce was dead: `Request::Highlight` called `sync_now`,
+    /// which flushes the pending buffer, so the real binary sent one full
+    /// `didChange` and one full token request per character typed. A test whose
+    /// input shape is not the caller's input shape is a test of a program
+    /// nobody runs.
     #[tokio::test]
     async fn a_burst_of_edits_collapses_into_one_did_change() {
         let (_dir, handle, seen, sent) = rig(Fake::new(), "fn main() {}").await;
@@ -1460,9 +1545,14 @@ mod tests {
         .await;
 
         for n in 1..=5 {
+            let text = format!("fn main() {{}}{}", "!".repeat(n));
             assert!(handle.post(Request::Change {
                 rel: "lib.rs".into(),
-                text: format!("fn main() {{}}{}", "!".repeat(n)),
+                text: text.clone(),
+            }));
+            assert!(handle.post(Request::Highlight {
+                rel: "lib.rs".into(),
+                text,
             }));
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -1477,6 +1567,17 @@ mod tests {
         assert_eq!(
             changes[0]["params"]["contentChanges"][0]["text"],
             json!("fn main() {}!!!!!")
+        );
+        // And the same for the colour question, which is the request that was
+        // forcing the flush. At most one per burst, asked after the buffer
+        // landed rather than before it.
+        let asks = log
+            .iter()
+            .filter(|m| m["method"] == "textDocument/semanticTokens/full")
+            .count();
+        assert!(
+            asks <= 1,
+            "a burst of typing asked for colour {asks} times: {log:?}"
         );
     }
 
@@ -1664,6 +1765,49 @@ mod tests {
             Some(&json!(true)),
             "ReferenceParams requires a context"
         );
+    }
+
+    /// **A refused question is a sentence, not an empty panel.**
+    ///
+    /// `ask` has said so since the module was written; the two requests that
+    /// spawn their own tasks -- references and symbols -- matched only
+    /// `Ok(Ok(_))` and dropped the other two arms on the floor. A server that
+    /// refuses, or one still indexing that never answers, therefore drew
+    /// nothing at all, which on this page reads as "there are none". Two
+    /// functions doing one job, and only one of them had the rule.
+    #[tokio::test]
+    async fn a_refused_places_question_is_said_rather_than_drawn_as_nothing() {
+        for (method, request) in [
+            (
+                "textDocument/references",
+                Request::References {
+                    rel: "lib.rs".into(),
+                    text: "fn main() {}".into(),
+                    line: 0,
+                    col: 3,
+                },
+            ),
+            (
+                "textDocument/documentSymbol",
+                Request::Symbols {
+                    rel: "lib.rs".into(),
+                    text: "fn main() {}".into(),
+                },
+            ),
+        ] {
+            let fake = Fake::new().refusing(method, "content modified");
+            let (_dir, handle, seen, _sent) = rig(fake, "fn main() {}").await;
+            handle.post(open("lib.rs", "fn main() {}"));
+            handle.post(request);
+            let update = until(&seen, |u| matches!(u, LspUpdate::Note { .. })).await;
+            let LspUpdate::Note { text, .. } = update else {
+                unreachable!("matched above");
+            };
+            assert!(
+                text.contains("content modified"),
+                "{method} was refused and said {text:?}"
+            );
+        }
     }
 
     /// What a file contains, nested: the tree is flattened depth-first and the
