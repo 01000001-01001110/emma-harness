@@ -468,10 +468,17 @@ pub const DESC_SAMPLING: &str = "Temperature, Max Output Tokens and Streaming ed
      once when the provider is built, so a change binds the next run.";
 /// The APPEARANCE description.
 ///
-/// Five mechanisms on one card and each named, because they really are five:
-/// two repaint, two wait for a restart, and two leave the process entirely to
-/// ask another application for something.
-pub const DESC_APPEARANCE: &str = "Theme and Accent repaint now. Glyphs is read once at \
+/// Five mechanisms on one card, and named individually because the row-by-row
+/// truth does not sort into two neat piles. **Only Accent repaints now.**
+/// `settings_accent` calls `palette::activate_accent_choice`, which updates
+/// the process-global accent every live `Palette` reads on its next draw —
+/// see `app.rs`. `settings_theme` does the opposite: it writes the name to
+/// `settings.json` and nothing else, because `main.rs` resolves the theme
+/// once, before the terminal exists, and there is no live `Theme` for a
+/// mid-session write to reach. The row's own receipt says so — *"in force
+/// from the next start"* — and this sentence used to contradict the row
+/// directly above it.
+pub const DESC_APPEARANCE: &str = "Accent repaints now. Theme, like Glyphs, is read once at \
      startup, so it applies to the next run. Font Family and Font Size store the value always \
      and ask the terminal to change its own font where it has a way to be asked. Status Bar \
      and Interface Hints are stored and read by nothing yet; each receipt says so.";
@@ -1870,6 +1877,25 @@ fn activate(v: &mut SettingsView) -> SettingsAction {
 /// An empty list answers with the built-in rather than panicking on a modulus
 /// by zero. `theme::names` cannot return one; a caller that built the view by
 /// hand can.
+///
+/// **This is not where the reported defect lived, and this function has not
+/// changed to fix it.** With one theme, `n == 1` and
+/// `(i + dir).rem_euclid(1)` is always `0`: `themes[0]` steps to `themes[0]`,
+/// harmlessly, the same answer this arithmetic has always given for a list of
+/// one. That was never wrong — a cycler over one name has nothing else to
+/// return. What was wrong is `cards()` calling this a [`RowKind::ThemeCycle`]
+/// at all when `themes.len() == 1`: a row drawn with chevrons and a receipt
+/// that says "written" when nothing could have moved. The fix is upstream —
+/// `cards()` now draws that row [`Value::Plain`] with [`RowKind::Note`]
+/// carrying [`NOTICE_THEME_ONE`] instead — which makes the `n == 1` branch
+/// below unreachable from a real key press: [`cycle`] only calls this
+/// function after `focused_kind` has matched `ThemeCycle`, and that variant
+/// no longer exists on a one-theme screen. It stays in the function, rather
+/// than becoming a `debug_assert!(themes.len() > 1)`, because a direct call
+/// with one name is not a contract violation — see
+/// `one_theme_is_stated_on_the_row_rather_than_cycled` for why a single-entry
+/// list is a state this module still has to describe correctly, just not
+/// through this row kind.
 fn theme_step(themes: &[String], current: &str, dir: isize) -> String {
     if themes.is_empty() {
         return "emma".to_string();
@@ -2856,6 +2882,28 @@ mod tests {
         assert!(
             NOTICE_THEME_ONE.contains("~/.emma/themes"),
             "the sentence does not say where a theme file goes"
+        );
+    }
+
+    /// The APPEARANCE card's description used to say "Theme and Accent
+    /// repaint now" directly above a Theme row whose own receipt says "in
+    /// force from the next start" — `settings_theme` (`app.rs`) only ever
+    /// writes `settings.json`, because `main.rs` resolves the theme once
+    /// before the terminal exists. `settings_accent` really does call
+    /// `palette::activate_accent_choice`, which a live `Palette` reads on its
+    /// next draw, so the two rows are not the same claim and the description
+    /// must not flatten them into one.
+    #[test]
+    fn the_appearance_card_does_not_claim_the_theme_repaints_now() {
+        assert!(
+            !DESC_APPEARANCE.contains("Theme and Accent repaint"),
+            "the card claims Theme repaints, contradicting the row's own \
+             \"in force from the next start\" receipt: {DESC_APPEARANCE}"
+        );
+        assert!(
+            DESC_APPEARANCE.contains("Accent repaints"),
+            "the one row that really does take effect immediately should say so: \
+             {DESC_APPEARANCE}"
         );
     }
 

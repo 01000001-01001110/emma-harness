@@ -55,6 +55,23 @@ use super::palette::Role;
 /// The two places Emma paints a background. Named rather than open-ended: a
 /// third one has to be added here, and needing an entry in this enum is a
 /// useful speed bump on "just paint a background".
+///
+/// **A known hole: a pair half cannot declare its own sixteen-colour name.**
+/// [`pair_halves`] reads each of `fg`/`bg` through `Value::as_str`, so a half
+/// is only ever a role name (`"accent"`) or a bare hex (`"#eee8d5"`) — never
+/// the `{ "hex": …, "ansi16": … }` object a *role* may be. A half spelled as a
+/// role inherits that role's declared or built-in `ansi16`; a bare hex has no
+/// role to inherit from, so [`half_entry`] falls back to **the built-in
+/// pair's** ansi16 for that half, regardless of what the rest of the theme
+/// looks like. `daylight.json`'s `selection.bg` is a bare hex
+/// (`"#eee8d5"`, a cream), and the built-in `Selection` pair's background
+/// half is `Color::DarkGray` — so on a sixteen-colour terminal `daylight`'s
+/// selection band is a dark band on a light theme, the opposite of the
+/// theme's own point. The fix is not "declare ansi16 on the hex": the schema
+/// has nowhere to put it. What would settle it is extending `pair_halves` to
+/// accept an object for a bare-hex half, the way [`role_entry`] already does
+/// for a role — nobody has done that yet, so this is a limitation, not a bug
+/// in the shipped file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pair {
     /// The `[y]`/`[n]` answer keys on the approval prompt.
@@ -293,8 +310,8 @@ pub(super) fn derive_index((r, g, b): (u8, u8, u8)) -> u8 {
 //
 // The whole of this section is about failing usefully. Nothing here returns a
 // `Result`, on purpose: the failure policy is partial application, and a `?`
-// anywhere in it would throw away the seven roles that parsed because the
-// eighth did not.
+// anywhere in it would throw away the twelve roles that parsed because the
+// thirteenth did not.
 // ---------------------------------------------------------------------------
 
 /// Names a theme file may not claim. `emma` is the compiled default, and a file
@@ -308,7 +325,7 @@ const RESERVED: [&str; 1] = ["emma"];
 pub const BUILT_IN: &str = RESERVED[0];
 
 /// Every role name a file may use, including the one that is refused — a typo
-/// of `text` should be told about `text`, not about seven names that do not
+/// of `text` should be told about `text`, not about thirteen names that do not
 /// include it.
 const ROLE_NAMES: [&str; 14] = [
     "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
@@ -562,8 +579,8 @@ fn apply_roles(theme: &mut Theme, roles: &serde_json::Value, notices: &mut Vec<S
 /// One role's three values, or `None` when the role keeps the built-in's.
 ///
 /// The granularity is the point: a typo in one hex costs that role and leaves
-/// the other seven applied, because a theme thrown away over one character is a
-/// theme its author cannot debug.
+/// the other twelve of the thirteen settable roles applied, because a theme
+/// thrown away over one character is a theme its author cannot debug.
 fn role_entry(
     name: &str,
     role: Role,

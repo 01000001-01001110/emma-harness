@@ -79,6 +79,15 @@ out for themselves.
   has unsaved edits or when the read had to replace bytes. A file that is not
   open, or that could not be read, is refused in words.
 
+- **Two themes ship**, `daylight` (for a light terminal) and `nocturne` (a
+  cool dark alternative to the built-in), under `.emma/themes/`. The Theme
+  row on the Settings screen only ever cycles what `~/.emma/themes/*.json`
+  holds, so a fresh install with an empty themes directory had exactly one
+  theme to offer and the row cycled it onto itself while reporting a write
+  that took effect — copy either file (or a theme of your own) into
+  `~/.emma/themes/` to give the row something to step to. A theme selects on
+  the next start, not this one; only Accent repaints live.
+
 - **The Settings screen writes back, card by card.** Appearance, sampling,
   the memory policy, the keybinding preset and every tool's rule now persist,
   and the permissions card writes. Four keys are stored and read by nothing

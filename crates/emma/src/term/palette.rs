@@ -1089,6 +1089,52 @@ mod tests {
                 Color::Indexed(233),
                 Color::Black,
             ),
+            // -- the six source-code roles ---------------------------------
+            //
+            // Added when `Role` grew from eight members to fourteen for the
+            // Code page's syntax colouring, and — until now — pinned nowhere:
+            // the eight roles above were a literal table transcribed from
+            // `table()`, and these six were settable in `theme::SETTABLE`
+            // from the day they were added without a single test reading
+            // their hex back. A hex moved by accident during a future
+            // refactor would have changed what the Code page looks like and
+            // nothing here would have gone red.
+            (
+                Role::Comment,
+                Color::Rgb(124, 121, 116),
+                Color::Indexed(244),
+                Color::DarkGray,
+            ),
+            (
+                Role::Keyword,
+                Color::Rgb(211, 134, 155),
+                Color::Indexed(175),
+                Color::Magenta,
+            ),
+            (
+                Role::Str,
+                Color::Rgb(152, 172, 116),
+                Color::Indexed(107),
+                Color::Green,
+            ),
+            (
+                Role::Number,
+                Color::Rgb(212, 158, 106),
+                Color::Indexed(179),
+                Color::Yellow,
+            ),
+            (
+                Role::Type,
+                Color::Rgb(126, 173, 168),
+                Color::Indexed(109),
+                Color::Cyan,
+            ),
+            (
+                Role::Func,
+                Color::Rgb(129, 161, 193),
+                Color::Indexed(110),
+                Color::LightBlue,
+            ),
         ];
         for (role, truecolor, indexed, named) in expected {
             for (level, want) in [
