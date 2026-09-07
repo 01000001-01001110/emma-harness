@@ -247,6 +247,16 @@ pub struct App {
     /// The home directory settings.json lives under. Resolved once; a test
     /// points it at a tempdir so no test touches the real file.
     home: Option<std::path::PathBuf>,
+    /// The project's configuration root, for the half of the theme list that
+    /// lives under `<project>/.emma/themes`.
+    ///
+    /// **`emma_harness::discover()` rather than a walk of this module's own**,
+    /// which is the whole reason it is safe to have it here: it is the same
+    /// function `Harness::boot` calls in `main.rs`, so the Settings row and the
+    /// startup that honours its choice cannot disagree about where a theme file
+    /// is. A second walk would be a second answer to one question, which this
+    /// codebase has already paid for once in path containment.
+    harness_root: Option<std::path::PathBuf>,
     /// Test seam for the tool-permission card: `Some` overrides the harness
     /// discovery so a test writes a rule into a tempdir rather than into
     /// whatever project the test binary was launched from.
@@ -356,6 +366,11 @@ impl App {
             settings_hits: super::settings::Hits::default(),
             settings_launch: None,
             home: emma_llm::auth::home_dir(),
+            // Once, at construction. The walk is a handful of `stat`s up to the
+            // filesystem root and the answer cannot change while the process
+            // runs, because `Harness::boot` resolved the same thing from the
+            // same cwd before this frame existed.
+            harness_root: emma_harness::discover().ok(),
             policy_file_override: None,
             ollama_host_override: None,
             harness_dir: std::env::var_os("HOME")
@@ -443,12 +458,18 @@ impl App {
                 .theme
                 .clone()
                 .unwrap_or_else(|| super::theme::BUILT_IN.to_string());
-            // `None` for the harness root: the app holds a home directory and
-            // no project root, so a theme file under `<project>/.emma/themes`
-            // is selectable by `/theme <name>` and does not appear in this
-            // cycler. Narrower than the command, and honestly so — a row that
-            // offered a name it could not step back to would be worse.
-            self.settings.themes = super::theme::names(self.home.as_deref(), None);
+            // **Both directories, and the argument for one of them was
+            // false.** This passed `None` for the project root, reasoning that
+            // "a row that offered a name it could not step back to would be
+            // worse" — but `main.rs` resolves the startup theme with
+            // `Some(&harness.root)`, so a name under `<project>/.emma/themes`
+            // *is* stepped back to, every run. The row was hiding names that
+            // work, which is the same defect as offering names that do not,
+            // pointed the other way: with the themes this build ships living
+            // in exactly that directory, the cycler had one entry and stepped
+            // it to itself while printing a receipt saying it had changed.
+            self.settings.themes =
+                super::theme::names(self.home.as_deref(), self.harness_root.as_deref());
             self.settings.memory_on = stored.memory.unwrap_or(true);
             // Absent means **off** here, the opposite of `memory` above and
             // deliberately so — `crate::settings::Settings::prune_history`
@@ -1514,6 +1535,14 @@ impl App {
     #[cfg(test)]
     pub(crate) fn set_home(&mut self, home: std::path::PathBuf) {
         self.home = Some(home);
+    }
+
+    /// Point the project half of the theme list at a tempdir, for the same
+    /// reason `set_home` exists: the real one is whatever project the test
+    /// binary happened to be launched from, which is not a fixture.
+    #[cfg(test)]
+    pub(crate) fn set_harness_root(&mut self, root: std::path::PathBuf) {
+        self.harness_root = Some(root);
     }
 
     /// Aim the tool-permission rows at a settings.local.json a test owns.
@@ -7581,12 +7610,68 @@ mod tests {
 
     // -- the Settings screen, live (settings-live) ---------------------------
 
+    /// A Settings screen over a tempdir home **and an empty project root**.
+    ///
+    /// The second half is not tidiness. `App::new` discovers the real project
+    /// root, so without this every test that opens Settings sees whatever theme
+    /// files this repository happens to ship -- and a test whose fixture is the
+    /// working tree is a test that changes meaning when somebody adds a file.
+    /// It broke the moment two themes were shipped, which is how it was found.
     fn open_settings_at(home: &std::path::Path) -> App {
         let mut app = App::new((161, 75));
         app.set_home(home.to_path_buf());
+        // Leaked deliberately: it must outlive the `App`, and a test binary
+        // exiting is what cleans it up. A `TempDir` returned alongside would
+        // change every call site for no gain.
+        let empty = Box::leak(Box::new(tempfile::tempdir().expect("empty project")));
+        app.set_harness_root(empty.path().to_path_buf());
         app.toggle_settings();
         assert!(app.settings_open());
         app
+    }
+
+    /// **The theme row lists what the next start will actually resolve.**
+    ///
+    /// It passed `None` for the project root, so the themes this build ships —
+    /// which live in `<project>/.emma/themes` — were invisible to it. On a
+    /// machine with no themes in the home directory that left the cycler with
+    /// one entry, stepping `emma` to `emma` while reporting that a theme had
+    /// been written. The row was hiding names that work, which is the same
+    /// defect as offering names that do not, pointed the other way.
+    #[test]
+    fn the_theme_row_lists_the_projects_themes_and_not_only_the_homes() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let themes = project.path().join("themes");
+        std::fs::create_dir_all(&themes).expect("themes dir");
+        for name in ["cyberpunk", "noir"] {
+            std::fs::write(themes.join(format!("{name}.json")), "{}").expect("write");
+        }
+        std::fs::create_dir_all(home.path().join(".emma").join("themes")).expect("home themes");
+        std::fs::write(
+            home.path().join(".emma").join("themes").join("mine.json"),
+            "{}",
+        )
+        .expect("write");
+
+        let mut app = App::new((161, 75));
+        app.set_home(home.path().to_path_buf());
+        app.set_harness_root(project.path().to_path_buf());
+        app.toggle_settings();
+
+        let listed = &app.settings.themes;
+        assert!(
+            listed.iter().any(|t| t == "cyberpunk") && listed.iter().any(|t| t == "noir"),
+            "a shipped theme must be reachable from the row: {listed:?}"
+        );
+        assert!(
+            listed.iter().any(|t| t == "mine"),
+            "and the home directory's own themes still are: {listed:?}"
+        );
+        assert!(
+            listed.len() > 1,
+            "with more than one theme the row must have something to step to"
+        );
     }
 
     fn skey(app: &mut App, code: KeyCode) -> bool {
