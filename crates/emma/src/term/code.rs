@@ -6422,6 +6422,83 @@ mod tests {
         );
     }
 
+    /// The colour a reader actually sees, taken off the painted buffer rather
+    /// than off `syntax_role`.
+    ///
+    /// **A test on the mapping alone would pass with the colour never
+    /// reaching a cell**, which is the shape of false receipt this project has
+    /// paid for before. So this paints the page and reads the styles back: the
+    /// comment is dim and the keyword is not, and the two are different
+    /// styles, which is the whole of the complaint that started this work.
+    #[test]
+    fn a_comment_and_the_code_beside_it_are_painted_differently() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["let x = 1; // why"]);
+        v.body_rows = 10;
+        v.apply_lsp(LspUpdate::Tokens {
+            path: "src/main.rs".into(),
+            items: vec![
+                Token {
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    kind: TokenKind::Keyword,
+                },
+                Token {
+                    line: 0,
+                    start: 11,
+                    end: 17,
+                    kind: TokenKind::Comment,
+                },
+            ],
+        });
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+
+        // The document's own row, found by its text rather than by a column
+        // this test computed: where the gutter ends is not this test's
+        // business, and the header carries a `/` of its own in the path, so a
+        // search over the whole pane would read the wrong cell and pass or
+        // fail for a reason that has nothing to do with syntax colour.
+        let rows = dump(&buf);
+        let y = rows
+            .iter()
+            .position(|r| r.contains("let x = 1;"))
+            .expect("the document line is drawn") as u16;
+        let cell = |glyph: &str| {
+            (0..area.width)
+                .map(|x| &buf[(x, y)])
+                .find(|c| c.symbol() == glyph)
+                .unwrap_or_else(|| panic!("no {glyph} on the document's line"))
+        };
+        let skin = skin();
+        let keyword = cell("l");
+        let comment = cell("/");
+        assert_eq!(
+            keyword.style().fg,
+            skin.palette.style(Role::Keyword).fg,
+            "the keyword is drawn in the keyword's colour"
+        );
+        assert_eq!(
+            comment.style().fg,
+            skin.palette.style(Role::Comment).fg,
+            "the comment is drawn in the comment's colour"
+        );
+        assert_ne!(
+            keyword.style().fg,
+            comment.style().fg,
+            "a comment the same colour as the code is the defect this fixes"
+        );
+        assert!(
+            comment
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM),
+            "and it is dim, which is the half that survives a colourless terminal"
+        );
+    }
+
     fn places(rows: Vec<(&str, usize, usize)>) -> LspUpdate {
         LspUpdate::Places {
             path: "src/main.rs".into(),

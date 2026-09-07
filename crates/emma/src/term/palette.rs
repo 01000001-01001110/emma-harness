@@ -513,7 +513,17 @@ impl Palette {
     }
 
     pub fn style(&self, role: Role) -> Style {
-        Style::default().fg(self.color(role))
+        let style = Style::default().fg(self.color(role));
+        if role == Role::Comment {
+            // The one role that carries a modifier as well as a colour, and
+            // for `Role::Dim`'s reason rather than as a flourish: at
+            // `Level::None` every colour is `Reset`, so a comment and the code
+            // it explains would be the same white text -- which is the exact
+            // complaint this palette was extended to answer. Dimming is the
+            // only separation a terminal with no colour can still draw.
+            return style.add_modifier(Modifier::DIM);
+        }
+        style
     }
 
     /// Dim is a *modifier* as well as a colour, so a terminal with no colour at
@@ -1155,7 +1165,7 @@ mod tests {
         assert_eq!(nearest_index((128, 128, 128)), 244);
     }
 
-    const ROLES: [Role; 8] = [
+    const ROLES: [Role; 14] = [
         Role::Text,
         Role::Dim,
         Role::Ok,
@@ -1164,5 +1174,79 @@ mod tests {
         Role::Info,
         Role::Accent,
         Role::Ground,
+        Role::Comment,
+        Role::Keyword,
+        Role::Str,
+        Role::Number,
+        Role::Type,
+        Role::Func,
     ];
+
+    /// The six source-code roles are six different colours at both fidelities
+    /// a terminal is likely to have.
+    ///
+    /// Not a tautology about the table: two roles that resolve to one colour
+    /// would draw a comment and a string identically, which is the defect the
+    /// roles were added to fix, and nothing else in this file would notice.
+    #[test]
+    fn the_six_code_roles_are_six_colours_and_not_four() {
+        let code = [
+            Role::Comment,
+            Role::Keyword,
+            Role::Str,
+            Role::Number,
+            Role::Type,
+            Role::Func,
+        ];
+        for level in [Level::Truecolor, Level::Ansi256, Level::Ansi16] {
+            let palette = Palette::new(level);
+            let mut seen: Vec<Color> = Vec::new();
+            for role in code {
+                let colour = palette.color(role);
+                assert_ne!(
+                    colour,
+                    Color::Reset,
+                    "{role:?} at {level:?} is the terminal's own foreground"
+                );
+                assert!(
+                    !seen.contains(&colour),
+                    "{role:?} repeats a colour at {level:?}"
+                );
+                seen.push(colour);
+            }
+        }
+    }
+
+    /// With no colour at all a comment is still dimmer than the code around
+    /// it, because a modifier is the one separation left when every colour is
+    /// `Reset`. `NO_COLOR`, a pipe and `--print` all reach this level.
+    #[test]
+    fn a_comment_is_dim_even_on_a_terminal_with_no_colour() {
+        let plain = Palette::new(Level::None);
+        assert_eq!(
+            plain.color(Role::Comment),
+            Color::Reset,
+            "no colour to give"
+        );
+        assert!(
+            plain
+                .style(Role::Comment)
+                .add_modifier
+                .contains(Modifier::DIM),
+            "a comment must still be separable"
+        );
+        assert!(
+            !plain
+                .style(Role::Keyword)
+                .add_modifier
+                .contains(Modifier::DIM),
+            "only the comment is dimmed; dimming the code would be worse than nothing"
+        );
+        // And with colour, the modifier stays: a comment is quieter than the
+        // rest whatever the terminal can do.
+        assert!(Palette::new(Level::Truecolor)
+            .style(Role::Comment)
+            .add_modifier
+            .contains(Modifier::DIM));
+    }
 }

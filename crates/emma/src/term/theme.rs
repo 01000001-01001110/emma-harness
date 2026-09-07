@@ -814,7 +814,7 @@ mod tests {
     use super::*;
     use crate::term::palette::{Level, Palette};
 
-    const ROLES: [Role; 8] = [
+    const ROLES: [Role; 14] = [
         Role::Text,
         Role::Dim,
         Role::Ok,
@@ -823,6 +823,12 @@ mod tests {
         Role::Info,
         Role::Accent,
         Role::Ground,
+        Role::Comment,
+        Role::Keyword,
+        Role::Str,
+        Role::Number,
+        Role::Type,
+        Role::Func,
     ];
 
     /// Write `<home>/.emma/themes/<name>.json` and hand back the home.
