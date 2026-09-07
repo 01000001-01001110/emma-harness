@@ -89,12 +89,11 @@
   </p>
 
   <p>
-    <strong>Not a decoder bug, and the fix is not to parse prose.</strong>
-    Reading a tool call out of an answer is how a client starts executing text
-    the model never committed to as a call, which is a larger hazard than the
-    misleading sentence. What is wrong is the sentence: the loop knows only that
-    no structured call arrived, and it reports that as a fact about what the
-    goal required. Settled by making the ending say what was observed, and by
+    <strong>The decoder is right and the sentence is wrong.</strong> Reading a
+    tool call out of an answer is how a client starts executing text the model
+    never committed to as a call, which is a larger hazard than a misleading
+    ending. The loop knows only that no structured call arrived, and it reports
+    that as a fact about what the goal required. Settled by making the ending say what was observed, and by
     saying out loud when an answer looks like an undecoded call, so somebody on
     a model that cannot emit them is told which half is missing.
   </p>
@@ -175,9 +174,8 @@
     </li>
     <li>
       <code>ToolCtx</code> has no session slot, so constructing tools
-      individually compiles and then silently misbehaves. Three crates document
-      the consequence separately, which is what a missing shared abstraction
-      looks like from below.
+      individually compiles and then silently misbehaves.
+      <a href="#hazards">The hazard below</a> has the detail.
     </li>
     <li>
       <code>with_extra</code>'s collision check is <code>debug_assert!</code>
@@ -211,6 +209,35 @@
     reader learning the mechanism is handed a caveat they cannot act on.
   </p>
 
+  <h3>Six of the fourteen theme colours are not pinned to their values</h3>
+
+  <p>
+    <code>the_built_in_theme_renders_exactly_what_shipped</code> in
+    <code>palette.rs</code> is a literal table of role, truecolor, 256 and 16,
+    and it stops at <code>Ground</code>. The six source-code roles that landed
+    on 2026-09-06 (<code>Comment</code>, <code>Keyword</code>,
+    <code>Str</code>, <code>Number</code>, <code>Type</code> and
+    <code>Func</code>) are in no such table. The other assertion,
+    <code>the_builtin_theme_is_what_emma_renders_today</code> in
+    <code>theme.rs</code>, walks all fourteen roles but compares the live
+    <code>Palette</code> against <code>BUILTIN</code>, and
+    <code>palette.rs</code> reads <code>BUILTIN</code>, so that comparison pins
+    the fidelity shape rather than any colour. Its literal receipts cover seven
+    of the original eight.
+  </p>
+
+  <p>
+    A mistyped hex in <code>BUILTIN</code> ships green, and nothing says so. Nothing else depends on those six values, so the failure is a
+    wrong colour rather than a broken build, which is exactly the class the
+    literal table was written to catch for the first eight.
+    <span class="chip unv">unverified</span>: nobody has checked whether the six
+    hexes on screen are the six in the source.
+    <em>What would settle it:</em> six more rows in the <code>palette.rs</code>
+    table, or six literal <code>assert_eq!(BUILTIN.rgb(&hellip;), (&hellip;))</code>
+    lines beside the seven in <code>theme.rs</code>. Either is a few minutes.
+  </p>
+  <span class="src">crates/emma/src/term/palette.rs &mdash; <code>the_built_in_theme_renders_exactly_what_shipped</code>; crates/emma/src/term/theme.rs &mdash; <code>BUILTIN</code>, <code>the_builtin_theme_is_what_emma_renders_today</code></span>
+
   <h3><code>reanchor</code> can send the cursor answer to the wrong reader</h3>
 
   <p>
@@ -222,8 +249,8 @@
   </p>
 
   <p>
-    The consequence is bounded. When it fails, <code>anchor</code> moves
-    nothing and the frame stays where it was.
+    It fails cheaply: <code>anchor</code> moves nothing and the frame stays
+    where it was.
     <span class="chip unv">unverified</span>: nobody has provoked the race.
     A resize storm on a unix terminal while a goal streams would settle it.
   </p>
@@ -246,7 +273,7 @@
     The allowance behaviour is pinned by a test in <code>approval.rs</code>, so
     that half is not in doubt.
     <span class="chip unv">unverified</span>: nobody has run the sequence end to
-    end &mdash; allow <code>Write</code>, then write a hook that turns the gate
+    end, allowing <code>Write</code> and then writing a hook that turns the gate
     off. Doing that once, and reading what the next run prompts for, would
     settle whether the exposure is real or whether something downstream catches
     it.
@@ -260,7 +287,7 @@
     tracking and the browser pool have no shared home. Constructing tools
     individually compiles and then silently misbehaves: the second tool does
     not see what the first recorded. Three crates document the same problem
-    separately &mdash; <code>tools/fs</code>, <code>tools/lsp</code> and
+    separately. <code>tools/fs</code>, <code>tools/lsp</code> and
     <code>tools/web</code> each warn about it in their own words, which is what
     a missing shared abstraction looks like from below.
   </p>
@@ -278,7 +305,10 @@
 
   <p>
     <code>main.rs</code> opens by saying it is wiring and nothing else.
-    <code>run()</code> is 634 lines sitting above the point a scripted provider
+    <code>run()</code> is
+    <span class="chip unv">unverified</span> <strong>1,077 lines</strong> now
+    (<code>crates/emma/src/main.rs:107</code>&ndash;1184, 2026-09-06; it was 634
+    when this page was written) sitting above the point a scripted provider
     attaches, so everything deciding what happens before the loop starts is
     outside what a test with no network can drive.
     <span class="chip unv">unverified</span>: found by reading, and nobody has
@@ -305,9 +335,12 @@
   <p>
     <code>config_check</code> prints the hooks, the agents, the commands, the
     permissions and the notes attached to each. It never calls
-    <code>status_line_note()</code>, and <code>main</code> reaches the call that
-    does roughly 280 lines after the <code>ConfigCheck</code> arm has already
-    returned. So a <code>statusLine</code> Emma refused is invisible to the one
+    <code>status_line_note()</code>, and <code>main</code> reaches the call
+    <span class="chip unv">unverified</span> roughly 529 lines after the
+    <code>ConfigCheck</code> arm has already returned
+    (<code>crates/emma/src/main.rs</code>: the arm returns at line 207, the
+    call is at line 736, 2026-09-06; this paragraph originally counted about
+    280). So a <code>statusLine</code> Emma refused is invisible to the one
     command whose stated job is answering why something did not happen.
   </p>
 
@@ -364,9 +397,8 @@
     The consequence is bounded: <code>Change::out</code> runs
     <code>sanitise</code> over every row, so control bytes never reach a cell
     and the symptom is a long meaningless diff rather than a corrupted frame.
-    <span class="chip cert">certified</span> by reading &mdash;
-    <code>creation</code> is 35 lines and contains one guard, on
-    <code>text.lines.len()</code>. Routing new-file writes through
+    <span class="chip cert">certified</span> by reading. <code>creation</code>
+    is 35 lines and contains one guard, on <code>text.lines.len()</code>. Routing new-file writes through
     <code>compute</code>, or duplicating its guards, would remove it.
   </p>
   <span class="src">crates/emma/src/term/diff.rs &mdash; <code>Change::creation</code>, <code>compute</code></span>
@@ -437,7 +469,7 @@
 
   <p>
     Each crate's builder is the only supported way to construct its set of
-    tools, and nothing enforces that &mdash; not the compiler, not the registry's
+    tools, and nothing enforces that: not the compiler, not the registry's
     coherence check, not any test. A member built directly compiles and then
     silently stops sharing session state. <code>ToolCtx</code>'s own doc names
     it: a <code>Write</code> built with the wrong tracker refuses nothing, and it
@@ -525,7 +557,7 @@
       <tr><td>Worktree isolation for subagents</td>
           <td>A worktree misses uncommitted work, which is the state agents most often operate on.</td></tr>
       <tr><td>Turning caching off on the compaction call</td>
-          <td>There is no such call. Compaction is deterministic and never reaches a model.</td></tr>
+          <td><strong>Refused, then overtaken.</strong> The reason given was that there is no such call, compaction being deterministic. That stopped being true on 2026-09-06: <code>Agent::model_summary</code> makes a call, and it passes <code>Caching::Off</code> for a reason the refusal never got to consider, that writing a summarisation request into the prompt cache evicts the prefix of the conversation about to be sent for real. See <a href="session-compaction.html">Compaction</a>.</td></tr>
       <tr><td>Feature-building in an autonomous loop</td>
           <td>The direction the model takes is unpredictable, and the source advocating loops says so itself.</td></tr>
       <tr><td>Preventing a loop from editing its own success check</td>
@@ -549,8 +581,9 @@
   </p>
 
   <footer class="pg">
-    Emma 0.1.0 &middot; sections revised 2026-08-22 at <code>9cb1743</code> against the source, after a docs audit found this page describing the pre-fix system &middot;
-        · <a href="index.html">back to the start</a> ·
+    Emma 0.1.0 &middot; sections revised 2026-08-22 at <code>9cb1743</code>
+    against the source, after a docs audit found this page describing the
+    pre-fix system &middot; <a href="index.html">back to the start</a> &middot;
     backlog: the owner's records, outside this repository
   </footer>
 

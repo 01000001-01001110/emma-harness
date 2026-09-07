@@ -120,7 +120,7 @@
     <code>the_snapshot_and_the_accumulation_have_different_shapes</code> pins it
     as shape rather than as literals. It slices the rendered row at the vertical
     rules and asserts the context cell contains no <code>/</code> and the tokens
-    cell no <code>%</code>. That is what must not regress; the label itself was
+    cell no <code>%</code>. That is what must not regress. The label itself was
     free to become <code>TOKENS</code> once shape carried the guard, which is
     what the mockup says and what the owner asked for after measuring the built
     bar against the image.
@@ -158,10 +158,9 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
   <span class="src">crates/emma/src/term/statusbar.rs — <code>compose</code>, <code>attempt</code></span>
 
   <p>
-    The reason context survives longest is stated rather than assumed:
-    <em>&ldquo;Running out of context forces an action, compact or start over,
-    so the context percentage is the last thing standing. The spent total is a
-    fact to know; the context level is a decision to make.&rdquo;</em>
+    Read that list downward and you have the priority. Everything above step 9
+    can go, and the bare context percentage stays, because that is the number
+    that forces your next move.
   </p>
 
   <p>
@@ -212,7 +211,11 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     zero traffic, and zero is a fact rather than a guess about a cap. They are
     uncached, so <code>up + down</code> is traffic charged at full price and is
     not expected to equal <code>session_tokens</code>, which is weighted the way
-    <code>spend</code> is. <code>session_tokens</code> has no cap in its cell
+    <code>spend</code> is.
+  </p>
+
+  <p>
+    <code>session_tokens</code> has no cap in its cell
     because there is no session budget for it to be a proportion of, it never
     falls, and no goal boundary clears it. <code>/clear</code> keeps it, along
     with the session id and the transcript that command already says it keeps,
@@ -233,9 +236,9 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     of 2026-08-26, and it was the <em>second</em> time this scoping had been
     wrong: the bar was reading one goal while the owner read it as the session's
     running story. The argument that put them there was right about the
-    <em>cell</em> &mdash; the split does sit beside the total &mdash; and wrong
+    <em>cell</em> (the split does sit beside the total) and wrong
     about the scope, because that cell is the session's.
-    <span class="chip test">tested</span> &mdash;
+    <span class="chip test">tested</span>:
     <code>a_new_goal_never_clears_the_sessions_token_counts</code>,
     <code>only_a_fresh_process_starts_the_session_counts_at_zero</code> and
     <code>the_goal_meter_still_starts_each_goal_empty</code>, which together
@@ -354,8 +357,7 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     shows a free segment at the cap invites one more call that the budget
     machinery then eats. Overstating room is the lie that costs money, so it is
     the one this arithmetic cannot produce.&rdquo;</em> Past the cap the real
-    figure shows, because a level over its cap is a fact the user should see
-    stated plainly.
+    figure shows, because a level over its cap is a fact you should see.
     <span class="chip test">tested</span> at the edges, and by two property
     tests: <code>the_meter_never_reads_full_below_the_cap</code> and
     <code>anything_used_fills_at_least_one_segment</code>.
@@ -368,8 +370,8 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     &ldquo;separators between the segments&rdquo; report. The three-quarters
     glyph buys the gap without spending an extra column, and it matches the
     image, where each meter block inks about 7px of a 9.3px cell. The empty
-    glyph is <code>&#9617;</code> rather than a grey block, and that is a
-    deliberate deviation from the mockup: filled and empty must differ by
+    glyph is <code>&#9617;</code> rather than a grey block, a deviation from
+    the mockup: filled and empty must differ by
     <em>shape</em>, not colour alone, <em>&ldquo;or the meter dies at
     <code>Level::None</code>. The mock was never run on a colourless
     terminal.&rdquo;</em>
@@ -537,8 +539,8 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     fixed at install and <em>&ldquo;a status line that could claim two rows
     would be a viewport that resizes under a running program. That is the class of bug
     that ate the last two attempts at this file.&rdquo;</em> The limit is stated
-    here rather than discovered by somebody whose two-line script silently lost
-    its second line.
+    here rather than left for you to discover when your two-line script silently
+    loses its second line.
     <span class="chip test">tested</span>:
     <code>a_program_that_prints_several_lines_yields_the_first_of_them</code>,
     including that a program printing nothing yields <code>None</code> and so
@@ -594,8 +596,8 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     what makes &lsquo;no escape byte survives&rsquo; true rather than
     approximate: an unrecognised sequence is consumed and discarded, never
     emitted a character at a time.&rdquo;</em> A status script emitting an OSC 8
-    hyperlink gets its text and not its link, which is a feature not arriving;
-    the same sequence in the raw buffer would be a corrupted frame.
+    hyperlink gets its text and not its link, which is a feature not arriving.
+    The same sequence in the raw buffer would be a corrupted frame.
   </p>
 
   <p>
@@ -661,8 +663,7 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
 
   <p>
     A program that answers <strong>replaces</strong> the built-in line entirely.
-    Anything it does not print is gone, and the docs are asked to state that
-    rather than leave it to be discovered.
+    Anything it does not print is gone.
     <span class="chip test">tested</span> from <code>view.rs</code>:
     <code>a_configured_status_line_takes_the_last_row_and_the_builtin_one_goes</code>
     asserts no fragment of the built-in survives anywhere, and
@@ -674,8 +675,12 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    Both files were read in full. <code>statusbar.rs</code> is 1,144 lines and
-    declares 18 function items: <code>render</code>, <code>bar_glyphs</code>,
+    Both files were read in full. <code>statusbar.rs</code> was 1,144 lines
+    when this page was written; it is
+    <span class="chip unv">unverified</span> <strong>1,171 lines</strong> now
+    (<code>wc -l</code>, 2026-09-06), and the function list below was not
+    re-walked against the 27-line difference. It declares 18 function items:
+    <code>render</code>, <code>bar_glyphs</code>,
     <code>compose</code>, <code>attempt</code>, <code>layout</code>,
     <code>sep_width</code>, <code>row_width</code>, <code>label</code>, three
     cell builders, <code>env_value</code>, <code>help_cell</code>,

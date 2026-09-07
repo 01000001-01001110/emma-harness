@@ -1,0 +1,23 @@
+{
+  "name": "blue",
+  "about": "For a dark terminal, measured against #071726 — deep navy, the colour the theme is named for, carried by the ground and the accent rather than by painting everything blue. The source roles still fan out across the wheel, because six shades of one hue is not syntax colouring.",
+  "roles": {
+    "dim":      { "hex": "#7591ad", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#58c99a", "ansi16": "light_green" },
+    "err":      { "hex": "#ff7a85", "ansi16": "light_red" },
+    "warn":     { "hex": "#f0c274", "ansi16": "light_yellow" },
+    "info":     { "hex": "#6fd3f5", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#4da3ff", "ansi16": "light_blue" },
+    "ground":   { "hex": "#071726", "ansi16": "black" },
+    "comment":  { "hex": "#5b7590", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#a8c4ff", "ansi16": "blue" },
+    "string":   { "hex": "#7fd6b4", "ansi16": "green" },
+    "number":   { "hex": "#f2b47a", "ansi16": "yellow" },
+    "type":     { "hex": "#6ee3ea", "ansi16": "cyan" },
+    "function": { "hex": "#c79bf0", "ansi16": "magenta" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#122a41" }
+  }
+}

@@ -369,7 +369,7 @@ for component in lexical_normalize(&amp;joined).components() {
   <strong>It is a refusal here and a warning one file over.</strong> The
   difference is what succeeds. A file named <code>NUL</code> under Emma&rsquo;s
   verbatim root is real, round-trips, and is merely awkward for other Windows
-  tooling, so refusing it would be Emma deciding what a user may call a file.
+  tooling, so refusing it would be Emma deciding what you may call a file.
   A stream write does not work at all. There is nothing to preserve and a real
   side effect to prevent.
 </p>
@@ -394,11 +394,11 @@ for component in lexical_normalize(&amp;joined).components() {
 
 <p>
   It is <code>#[cfg(windows)]</code> because on unix a colon is an ordinary
-  character in a file name and refusing it would break real paths. The hazard
-  the check cannot rule out — a non-NTFS Windows filesystem that treats
-  <code>:</code> as ordinary would be refused a name that would have worked —
-  is listed under <a href="roadmap.html#hazards">named hazards</a> rather than
-  described here.
+  character in a file name and refusing it would break real paths. There is a
+  hazard the check cannot rule out. A non-NTFS Windows filesystem that treats
+  <code>:</code> as ordinary would be refused a name that would have worked, and
+  that is listed under <a href="roadmap.html#hazards">named hazards</a> rather
+  than described here.
 </p>
 
 <h2 id="existing">The variant that demands the file be there</h2>
@@ -539,8 +539,8 @@ for component in lexical_normalize(&amp;joined).components() {
     &ldquo;<code>Bash</code> can do it anyway&rdquo; is the reasoning that ends
     with every guard removed, so the decision is the owner's. It was recorded
     as <code>SEC-001</code> in a rulings file that left the tree
-    on 2026-08-30, and it is still unanswered: a product
-    question about whether containment should become a sandbox, not a security
+    on 2026-08-30, and it is still unanswered. It is a product question about
+    whether containment should become a sandbox, rather than a security
     incident.
   </p>
 </div>

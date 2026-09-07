@@ -165,11 +165,14 @@ MouseEventKind::Down(MouseButton::Left)
 {</code></pre>
 
   <p>
-    That guard is the whole of the arrangement. A Shift-modified press is
-    refused here even where a terminal forwards it, so the terminal's own
-    selection is never bid for; an unmodified one is Emma's, and what it reaches
-    is decided in order: an open page first, then the sidebar's affordance, then
-    the scrollbar, then the chat pane. The comment above the arm still says
+    A Shift-modified press is refused here even where a terminal forwards it, so
+    the terminal's own selection is never bid for. An unmodified press is
+    Emma's, and what it reaches is decided in order: an open page first, then
+    the sidebar's affordance, then the scrollbar, then the chat pane.
+  </p>
+
+  <p>
+    The comment above the arm still says
     <em>&ldquo;drags, releases and every other button fall through
     untouched&rdquo;</em>, which stopped being true when the in-pane selection
     landed: there are <code>Drag</code> and <code>Up</code> arms below it now.
@@ -267,10 +270,10 @@ pub fn selection_extend(&amp;mut self, col: u16, row: u16) {
   <span class="src">crates/emma/src/term/app.rs &mdash; <code>selection_extend</code></span>
 
   <p>
-    The order in that function is the argument: scroll first, then read the
-    head. The row the pointer is on holds different text after the scroll than
-    before it, and the head belongs to the text rather than to the cell. Reading
-    the head first would place it one screenful behind on every edge event.
+    Scroll first, then read the head. The row the pointer is on holds different
+    text after the scroll than before it, and the head belongs to the text
+    rather than to the cell, so reading it first would place it one screenful
+    behind on every edge event.
     <span class="chip test">tested</span>
     <code>the_anchor_stays_on_its_row_while_the_drag_scrolls</code> and
     <code>a_drag_at_the_top_edge_reveals_rows_and_copies_them</code>; the second
@@ -318,18 +321,24 @@ fn selection_scroll(&amp;mut self, pane: Rect, row: u16) {
   <span class="src">crates/emma/src/term/app.rs &mdash; <code>selection_scroll</code>, <code>DRAG_FAR_ROWS</code></span>
 
   <p>
-    Three things in that function are worth stating rather than deducing. A
-    pointer <em>on</em> the pane's first or last row scrolls one row per event,
-    and a pointer more than one row past it takes <code>DRAG_FAR_ROWS</code>,
-    which is the wheel's <code>WHEEL_ROWS</code> rather than a second three: an
-    overshoot is asking for distance, and the reader already knows what the
-    wheel's step feels like. The upward case is clamped to
-    <code>max_offset</code> for the scrollbar's reason, because offset past it
-    is travel the view cannot show, and a drag held at the top edge would
-    otherwise bank a row of it per event and spend the way back down undoing it.
-    And there is no timer: a terminal mouse reports only on movement, so holding
-    still at the edge repeats nothing. That is what a cell grid can honestly do
-    without a repaint loop running off a clock.
+    So a pointer <em>on</em> the pane's first or last row scrolls one row per
+    event, and a pointer more than one row past it takes
+    <code>DRAG_FAR_ROWS</code>, which is the wheel's <code>WHEEL_ROWS</code>
+    rather than a second three. An overshoot is asking for distance, and you
+    already know what the wheel's step feels like.
+  </p>
+
+  <p>
+    The upward case is clamped to <code>max_offset</code>, the scrollbar's own
+    bound: offset past it is travel the view cannot show, and a drag held at the
+    top edge would otherwise bank a row of it per event and spend the way back
+    down undoing it.
+  </p>
+
+  <p>
+    There is no timer. A terminal mouse reports only on movement, so holding
+    still at the edge repeats nothing, which is what a cell grid can do without
+    a repaint loop running off a clock.
     <span class="chip test">tested</span>
     <code>a_pointer_well_past_the_pane_scrolls_by_the_wheels_step</code>,
     <code>the_top_edge_drag_stops_at_the_last_row_the_view_can_show</code>,
@@ -441,10 +450,13 @@ pub fn clipboard(&amp;self, text: &amp;str) -&gt; bool {
 
   <p>
     The refusal sits in the function that writes the bytes. Until 2026-08-23
-    only the call site checked <code>framed()</code>; the doc comment asked
-    callers to do the same. No test named <code>Copy</code> guarded that path:
-    deleting the call-site check emitted OSC 52 into a pipe with the whole
+    only the call site checked <code>framed()</code> and the doc comment asked
+    callers to do the same. No test named <code>Copy</code> guarded that path,
+    so deleting the call-site check emitted OSC 52 into a pipe with the whole
     suite green.
+  </p>
+
+  <p>
     <span class="chip test">tested</span>
     <code>an_unframed_terminal_refuses_to_write_the_clipboard</code> in
     <code>term.rs</code> covers all four unframed constructors. Removing the
@@ -488,11 +500,8 @@ pub fn clipboard(&amp;self, text: &amp;str) -&gt; bool {
 fn say(term: &amp;Term, text: &amp;str) {</code></pre>
 
   <p>
-    Emma never claims the clipboard received anything. OSC 52 has no
-    acknowledgement in the protocol, so there is no reply to wait for and
-    nothing downstream can report success as a fact. The note says how many
-    characters were sent and that a terminal without OSC 52 will silently drop
-    them.
+    So the note says how many characters were sent, and that a terminal without
+    OSC 52 will silently drop them. It never says they arrived.
     <span class="chip unv">unverified</span> Whether the sequence reaches the
     clipboard in the owner's Windows Terminal has not been observed. The PTY
     harness can prove the bytes go out and never that they arrived; settling it

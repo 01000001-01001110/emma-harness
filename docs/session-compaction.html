@@ -101,11 +101,14 @@ struct Chapter {
   <p>
     A chapter is one whole goal. Compaction works in chapters because cutting
     anywhere else risks separating a <code>tool_use</code> from the result that
-    answers it, and a boundary that is "wherever the arithmetic landed" is one
-    somebody has to re-derive every time they read the code. <code>goal</code>
-    and <code>answer</code> live beside the messages because they are what a
-    summary is made of, and deriving them back out of the message list
-    afterwards would be guesswork.
+    answers it, and a boundary at "wherever the arithmetic landed" is one you
+    have to re-derive every time you read the code.
+  </p>
+
+  <p>
+    <code>goal</code> and <code>answer</code> live beside the messages because
+    they are what a summary is made of. Deriving them back out of the message
+    list afterwards would be guesswork.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Chapter</code> and its doc</span>
 
@@ -259,8 +262,8 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
     provider's own <code>billable_input_tokens</code> for the previous call,
     which covers the whole request: the system prompt and the tool schemas as
     well as the conversation. The estimate stands in for one case, the first
-    check of a goal on a process that has not called the model yet, and in
-    practice that is a resume into a large session.
+    check of a goal on a process that has not called the model yet, usually a
+    resume into a large session.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, and its two call sites in <code>run_goal</code></span>
 
@@ -276,23 +279,21 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
   <p>
     The counting loop is greedy over whole chapters and stops as soon as the
     remainder fits, so it never takes the newest goal unless it has to take
-    everything. It measures each chapter once. Re-summing the conversation
-    inside the loop would be quadratic in a list whose elements are file
-    contents. That cost stays invisible until a session gets
-    large enough to need compaction in the first place.
+    everything. It measures each chapter once, because re-summing the whole
+    conversation inside the loop would be quadratic in a list whose elements are
+    file contents, and that cost stays invisible until a session gets large
+    enough to need compaction in the first place.
   </p>
 
   <p>
-    The tail of the function used to be a bare
-    <code>self.compact(take, size, why);</code>, dropping the returned
-    <code>Compacted</code> on the floor. That mattered in exactly one case: a
-    conversation over its cap with nothing left to summarise (one enormous
-    goal, or a history already reduced to summaries) where
-    <code>compact</code> answers <code>Compacted::Nothing</code> with a reason
-    and the threshold path said none of it. Such a session grew on every call
-    in silence until the token budget or a provider 400 ended it, and the
-    user's first sign was the run stopping. The reason is now caught and said
-    once per session, on the <code>said_compaction_stuck</code> flag, with
+    The dropped reason that comment names was a bare
+    <code>self.compact(take, size, why);</code> at the tail of the function,
+    discarding the <code>Compacted</code> it answered with.
+  </p>
+
+  <p>
+    The reason is caught now and said once per
+    session, on the <code>said_compaction_stuck</code> flag, with
     <code>/clear</code> named as the way out; once rather than per call,
     because the condition holds on every subsequent request and a warning per
     request is a run burying itself in its own complaint.
@@ -417,10 +418,9 @@ if after &gt;= before {
 
   <p>
     The note is roughly three hundred characters, so two four-word goals compact
-    upward and the guard fires. That is not a corner case invented for a test;
-    it is what the first live <code>/compact</code> did, and the bug it produced
-    was a sentence rather than a crash. The arithmetic was right and the
-    explanation was wrong, so a user was told their conversation was already
+    upward and the guard fires. The bug the first live <code>/compact</code>
+    produced was a sentence rather than a crash: the arithmetic was right and
+    the explanation was wrong, so a user was told their conversation was already
     summarised when it was nothing of the sort. There are now two branches, and
     the second quotes the before and after so the claim can be checked against
     the numbers.
@@ -605,7 +605,7 @@ self.s.log.append(
 
   <p>
     The note under a summary is a different sentence from the note under a
-    collapse, and the reason is worth keeping. <code>COMPACTED_NOTE</code> opens
+    collapse. <code>COMPACTED_NOTE</code> opens
     by promising the text above it is preserved word for word, which is the
     whole reason the collapse can be trusted and is exactly what a summary is
     not. <code>SUMMARISED_NOTE</code> says the text was written by a model
@@ -631,9 +631,9 @@ self.s.log.append(
     <code>SUMMARY_PROMPT</code> lifted out of <code>agent.rs</code> at run time
     and a synthetic two-goal transcript as the user message. The answer was 461
     characters against an 816-character transcript, kept all three file paths
-    and the reason for the decision, and dropped the tool-result body. So the
-    &ldquo;does not shrink&rdquo; guard is not a formality on a real answer; it
-    simply did not fire on that one.
+    and the reason for the decision, and dropped the tool-result body. The
+    &ldquo;does not shrink&rdquo; guard still has work to do on a real answer.
+    It simply did not fire on that one.
   </p>
 
   <p>
@@ -646,8 +646,11 @@ self.s.log.append(
     so no future code may assume the answer's shape. One model, one prompt, one
     transcript: the same call against the three other local models would say
     whether it is a habit of this model or of the prompt.
+  </p>
+
+  <p>
     <span class="chip unv">unverified</span> The answer's last clause was
-    garbled &mdash; <em>&ldquo;remains updated to be corrected&rdquo;</em> is not
+    garbled. <em>&ldquo;remains updated to be corrected&rdquo;</em> is not
     English and inverts what the transcript said. <strong>That is the objection
     the design answered rather than removed.</strong> A summary is a
     claim, a bad one is recorded verbatim, and it is replayed on every resume
@@ -684,15 +687,21 @@ self.s.log.append(
   </p>
 
   <p>
-    There is no flag for it, and it is on whenever the cap is. The alternatives
-    are worse in ways the module names. <code>prune</code> removes traffic a
-    later call superseded, so twenty-five reads of twenty-five different files
-    are twenty-five live results and it has nothing to take; it also runs on
-    every call whether or not the request is near the cap, paying the
-    prompt-cache invalidation unconditionally. Shedding runs only when a
-    measured request has already passed the cap, so the cache cost is paid
-    exactly when the alternative is a request the provider will refuse. An
-    amnesiac conversation beats a refused one.
+    There is no flag for it, and it is on whenever the cap is.
+  </p>
+
+  <p>
+    The alternative the module names is <code>prune</code>, which removes
+    traffic a later call superseded. Twenty-five reads of twenty-five different
+    files are twenty-five live results, so it has nothing to take, and it runs
+    on every call whether or not the request is near the cap, paying the
+    prompt-cache invalidation unconditionally.
+  </p>
+
+  <p>
+    Shedding runs only when a measured request has already passed the cap, so
+    you pay the cache cost exactly when the alternative is a request the
+    provider will refuse.
   </p>
   <span class="src">crates/emma/src/agent.rs &mdash; <code>shed_the_running_goal</code>, <code>shed_note</code>, <code>KEEP_RECENT_TURNS</code>, <code>SHED_MARK</code>, <code>block_wire_len</code></span>
 
@@ -756,7 +765,7 @@ say(
 );</code></pre>
 
   <p>
-    The workaround it offers is real rather than a deflection: a goal's answer
+    The workaround it offers is real: a goal's answer
     is one of the two things compaction keeps, so asking for the summary as an
     ordinary goal puts it somewhere compaction cannot take it.
     <span class="chip test">tested</span>
@@ -843,10 +852,14 @@ pub fn clear(&amp;mut self) -&gt; Cleared {
     session files, on 2026-08-26: superseded reads carry 2.4% of byte-turns
     there, 245,728 <code>tool_result</code> bytes of 10,104,760 over the 36
     sessions that used a tool at all, and all three transforms together reach
-    2.5%. The best single session was 5.1% and most were 0.0%. Neither number
-    refutes the other. The payoff depends on what the session did: a run that
-    reads one file eleven times to make four edits is the shape that pays, and a
-    run that greps, builds and reads each file once is this corpus.
+    2.5%. The best single session was 5.1% and most were 0.0%.
+  </p>
+
+  <p>
+    Neither number refutes the other. The payoff depends on what the session
+    did: a run that reads one file eleven times to make four edits is the shape
+    that pays, and a run that greps, builds and reads each file once is this
+    corpus.
     <span class="chip obs">observed</span>: one run of the in-file
     <code>measurement</code> harness over a home directory nobody kept. Re-run
     it against any corpus and it prints that corpus's own number.
@@ -864,17 +877,21 @@ pub fn clear(&amp;mut self) -&gt; Cleared {
   </p>
 
   <p>
-    Two invariants hold the whole file. It rewrites and never deletes, because a
-    <code>tool_result</code> whose <code>tool_use_id</code> has no matching
-    <code>tool_use</code> is rejected by Anthropic, so dropping one side of a
-    pair is not an option even when only one side holds the bytes. Every
-    function mutates the contents of a block that is already there, and the
-    transform takes <code>&amp;mut [Message]</code> rather than a
-    <code>Vec</code> so the type carries the length invariant. And nothing here
-    touches the session log: <code>Agent::conversation</code> stays faithful to
-    what was recorded, because the fold of the log has to equal it, and only the
-    outbound request is rewritten. Despite the module's name there is no
-    <code>std::fs</code> in the file.
+    Two rules hold the whole file. The first: it rewrites and never deletes,
+    because a <code>tool_result</code> whose <code>tool_use_id</code> has no
+    matching <code>tool_use</code> is rejected by Anthropic, so you cannot drop
+    one side of a pair even when only one side holds the bytes. Every function
+    mutates the contents of a block that is already there, and the transform
+    takes <code>&amp;mut [Message]</code> rather than a <code>Vec</code> so the
+    type carries the length rule.
+  </p>
+
+  <p>
+    The second: nothing here touches the session log.
+    <code>Agent::conversation</code> stays faithful to what was recorded,
+    because the fold of the log has to equal it, and only the outbound request
+    is rewritten. Despite the module's name there is no <code>std::fs</code> in
+    the file.
     <span class="chip cert">certified</span>:
     <code>grep -n "std::fs" crates/emma/src/prune.rs</code> matches twice, once
     in the module doc's own sentence and once inside the
@@ -969,9 +986,13 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
     and not monotonic with release date, and the table now runs from 512 to
     4,096: <code>claude-haiku-4-5</code> and <code>claude-opus-4-6</code> cache
     nothing under 4,096 tokens, and a model the table has never heard of is
-    assumed to be at 4,096 too. At a 512 floor the gap between an under-counting
-    estimate and the truth costs a marker on a prefix of a couple of kilobytes.
-    At 4,096 it is a prefix of roughly sixteen kilobytes going unmarked, and one
+    assumed to be at 4,096 too.
+  </p>
+
+  <p>
+    At a 512 floor the gap between an under-counting estimate and the truth
+    costs you a marker on a prefix of a couple of kilobytes. At 4,096 it is a
+    prefix of roughly sixteen kilobytes going unmarked, and one
     <code>/model</code> or one Haiku-typed delegation is enough to reach that
     floor.
     <span class="chip unv">unverified</span>: the direction of the error is
@@ -1008,12 +1029,18 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
     the 103 session files on this machine, across 177 <code>model_call</code>
     records, at 2026-08-16 20:28 EDT, with the largest input any call carried
     being 95,524 tokens against the 120,000 default cap. Close, and never over.
+  </p>
+
+  <p>
     That count certifies a build which had neither the summariser nor shedding,
     so it says nothing about this one and the green would be stale. Re-counting
-    the corpus is what would settle it. Every claim on this page about the
-    <em>trigger</em> still rests on tests and on reading, with no production
-    firing behind it, and the <em>mechanism</em> is exercised by tests that set
-    <code>max_context</code> to 400 and to 1.
+    the corpus would settle it.
+  </p>
+
+  <p>
+    Every claim on this page about the <em>trigger</em> still rests on tests and
+    on reading, with no production firing behind it. The <em>mechanism</em> is
+    exercised by tests that set <code>max_context</code> to 400 and to 1.
     <span class="chip unv">unverified</span> against a live provider: settle it
     by running a real session with <code>--max-context</code> set to something
     an ordinary conversation crosses, and reading the <code>compacted</code>

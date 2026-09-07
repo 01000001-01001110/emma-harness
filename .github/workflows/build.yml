@@ -39,6 +39,16 @@ on:
       # The fork port: every push gets the macOS and Windows build the merge
       # bar requires, before the review rather than after it.
       - port/mac-fork
+      # **Every working branch, by pattern, and the reason is a branch that
+      # went four commits with no CI at all.** Naming branches one at a time
+      # means the workflow is edited at the start of each piece of work, which
+      # is exactly when nobody thinks about it: the macOS half of the matrix
+      # had not run once on `lsp/intellisense`, on work whose whole subject is
+      # a terminal drawing colours.
+      - "lsp/**"
+      - "feat/**"
+      - "fix/**"
+
 
 permissions:
   contents: read
@@ -67,15 +77,22 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
-      # Once, not twice: formatting and lints are a property of the source and
-      # cannot differ by platform, so the second run would be minutes spent to
+      # Formatting is a property of the source and genuinely cannot differ by
+      # platform, so it runs once and the second run would be minutes spent to
       # learn the same thing.
       - name: fmt
         if: matrix.os == 'windows-latest'
         run: cargo fmt --all -- --check
 
+      # **Clippy runs on both, and the sentence above used to cover it.** That
+      # was wrong, and it hid a real finding for as long as this workflow has
+      # existed: `dead_code` is evaluated after `cfg`, so a function whose only
+      # caller is behind `#[cfg(windows)]` is live on Windows and dead on
+      # macOS. `bounded_dimensions` in `tools/screenshot` was exactly that, and
+      # the first macOS clippy run in this repository's history failed on it.
+      # A lint that reads the same source can still reach a different answer
+      # when the source it compiles is not the same source.
       - name: clippy
-        if: matrix.os == 'windows-latest'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # --no-fail-fast because cargo stops at the first failing target, and a

@@ -197,6 +197,31 @@ pub enum Role {
     Accent,
     /// Only ever a *foreground* on an accent background: the answer keys.
     Ground,
+
+    // -- source code --------------------------------------------------------
+    //
+    // **Six more, and they are the same idea rather than an exception to it.**
+    // A role is named for what a piece of text *means*, and "this is a comment"
+    // is exactly that kind of meaning: it is why a reader's eye can skip it.
+    // Before these, every character of every file on the Code page was `Text`,
+    // and a comment was indistinguishable from the code it explained.
+    //
+    // Six because that is what a reader needs to parse a screen of code at a
+    // glance, and because the categories come from the language server rather
+    // than from a guess: it has type-checked the file, so it knows a `//`
+    // inside a string is not a comment.
+    /// A comment. The one a reader most needs to see past.
+    Comment,
+    /// A keyword or modifier: the language's own words.
+    Keyword,
+    /// A string or regular-expression literal.
+    Str,
+    /// A numeric literal.
+    Number,
+    /// A type, struct, enum, interface or namespace: the nouns.
+    Type,
+    /// A function, method or macro: the verbs.
+    Func,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +319,66 @@ impl Accent {
 /// The accent named exactly `name`, or `None`. Exact match, no case folding.
 pub fn accent(name: &str) -> Option<&'static Accent> {
     ACCENTS.iter().find(|a| a.name == name)
+}
+
+/// The one lock every test that touches ambient colour takes.
+///
+/// **The accent and the theme are process-global on purpose** -- a `Palette` is
+/// `Copy` and the viewport holds copies, so a picker that changes either must
+/// not have to find them all. The cost is that the parallel test harness lets
+/// one test's selection reach another's palette, which is how the accent's
+/// three tests first read green and then red on the same tree.
+///
+/// It lives here rather than inside `palette::tests` because `app`'s Settings
+/// tests set the same cells through `settings_theme`, and a second lock would
+/// be two answers to one question. Resetting *both* cells is the point: a guard
+/// that cleared only the accent left the theme leaking, which is exactly the
+/// failure that put this comment here.
+#[cfg(test)]
+pub(crate) fn ambient_reset() -> std::sync::MutexGuard<'static, ()> {
+    static AMBIENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = AMBIENT.lock().unwrap_or_else(|e| e.into_inner());
+    activate_accent(&ACCENTS[0]);
+    if let Ok(mut slot) = ACTIVE_THEME.write() {
+        *slot = None;
+    }
+    guard
+}
+
+/// The theme in force, for a palette built with [`Palette::live`].
+///
+/// **The half of the fork's ambient registry the port left behind.** The
+/// comment above this region has said since the port that the accent uses "the
+/// same seam the fork's live palette used, without reintroducing that registry
+/// here" -- and the consequence was a Settings screen where choosing an accent
+/// repainted and choosing a theme did nothing until the next start. One control
+/// answering and its neighbour not is what makes a working feature read as
+/// broken, which is what the owner reported.
+///
+/// A `RwLock` rather than the accent's `AtomicUsize`, because an accent is an
+/// index into a static table and a `Theme` is eighteen entries loaded from a
+/// file at runtime. The read is on the per-cell paint path, which sounds
+/// alarming and is not: the accent already does an ambient read per cell, and
+/// an uncontended `RwLock` read is a handful of nanoseconds against a frame
+/// budget of sixteen milliseconds. Measured cost is a thing to check if a
+/// profile ever says so; assumed cost is not a reason to ship the
+/// inconsistency.
+static ACTIVE_THEME: std::sync::RwLock<Option<Theme>> = std::sync::RwLock::new(None);
+
+/// The theme every live palette draws with, from the next redraw on.
+///
+/// Nothing calls this at startup: the theme resolved there is already inside
+/// the `Palette` that `Term::interactive` builds, and a palette that is not
+/// `live` -- every test fixture, every `-p` run -- never consults this at all.
+pub fn activate_theme(theme: Theme) {
+    if let Ok(mut slot) = ACTIVE_THEME.write() {
+        *slot = Some(theme);
+    }
+}
+
+/// The ambient theme, if one has been chosen since this process started.
+pub fn active_theme() -> Option<Theme> {
+    ACTIVE_THEME.read().ok().and_then(|t| *t)
 }
 
 /// The accent override in force, as an index into [`ACCENTS`].
@@ -457,6 +542,23 @@ impl Palette {
         }
     }
 
+    /// The theme this palette draws from: the ambient one when it is live and
+    /// somebody has chosen one, and the resolved one it was built with
+    /// otherwise.
+    ///
+    /// **`live` is the whole safety argument.** Only `Term` builds a live
+    /// palette, so a test fixture, a `-p` run and every `with_theme` caller
+    /// keep the theme they were handed however the ambient cell is set -- which
+    /// is what stops one test's selection leaking into another's colours.
+    fn theme(&self) -> Theme {
+        if self.live {
+            if let Some(t) = active_theme() {
+                return t;
+            }
+        }
+        self.theme
+    }
+
     /// The colour for a role, at whatever fidelity this terminal has.
     ///
     /// **The first line is the whole of the safety argument, and its position
@@ -479,16 +581,26 @@ impl Palette {
         let role = self.resolve_role(role);
         match self.level {
             Level::Truecolor => {
-                let (r, g, b) = self.theme.rgb(role);
+                let (r, g, b) = self.theme().rgb(role);
                 Color::Rgb(r, g, b)
             }
-            Level::Ansi256 => Color::Indexed(self.theme.indexed(role)),
-            _ => self.theme.ansi16(role),
+            Level::Ansi256 => Color::Indexed(self.theme().indexed(role)),
+            _ => self.theme().ansi16(role),
         }
     }
 
     pub fn style(&self, role: Role) -> Style {
-        Style::default().fg(self.color(role))
+        let style = Style::default().fg(self.color(role));
+        if role == Role::Comment {
+            // The one role that carries a modifier as well as a colour, and
+            // for `Role::Dim`'s reason rather than as a flourish: at
+            // `Level::None` every colour is `Reset`, so a comment and the code
+            // it explains would be the same white text -- which is the exact
+            // complaint this palette was extended to answer. Dimming is the
+            // only separation a terminal with no colour can still draw.
+            return style.add_modifier(Modifier::DIM);
+        }
+        style
     }
 
     /// Dim is a *modifier* as well as a colour, so a terminal with no colour at
@@ -557,7 +669,7 @@ impl Palette {
         if self.level == Level::None {
             return Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
         }
-        let (fg, bg) = self.theme.pair(Pair::Selection);
+        let (fg, bg) = self.theme().pair(Pair::Selection);
         match self.level {
             Level::Truecolor => Style::default()
                 .fg(Color::Rgb(fg.0, fg.1, fg.2))
@@ -630,18 +742,7 @@ mod tests {
     use super::super::theme::{load, BUILTIN};
     use super::*;
 
-    /// The accent is process-global on purpose (see `activate_accent_choice`),
-    /// and the test harness runs tests on parallel threads, so every test
-    /// that sets it takes this guard first and starts from the theme's own.
-    /// Without it these three tests fail each other in whichever order the
-    /// scheduler picks, which is how the first run of them read green and
-    /// the second red.
-    static AMBIENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    fn ambient_reset() -> std::sync::MutexGuard<'static, ()> {
-        let guard = AMBIENT.lock().unwrap_or_else(|e| e.into_inner());
-        activate_accent(&ACCENTS[0]);
-        guard
-    }
+    use super::ambient_reset;
 
     /// The accent override borrows another role's swatch **from the theme in
     /// force**, so it survives a theme switch and never introduces a colour
@@ -1054,6 +1155,52 @@ mod tests {
                 Color::Indexed(233),
                 Color::Black,
             ),
+            // -- the six source-code roles ---------------------------------
+            //
+            // Added when `Role` grew from eight members to fourteen for the
+            // Code page's syntax colouring, and — until now — pinned nowhere:
+            // the eight roles above were a literal table transcribed from
+            // `table()`, and these six were settable in `theme::SETTABLE`
+            // from the day they were added without a single test reading
+            // their hex back. A hex moved by accident during a future
+            // refactor would have changed what the Code page looks like and
+            // nothing here would have gone red.
+            (
+                Role::Comment,
+                Color::Rgb(124, 121, 116),
+                Color::Indexed(244),
+                Color::DarkGray,
+            ),
+            (
+                Role::Keyword,
+                Color::Rgb(211, 134, 155),
+                Color::Indexed(175),
+                Color::Magenta,
+            ),
+            (
+                Role::Str,
+                Color::Rgb(152, 172, 116),
+                Color::Indexed(107),
+                Color::Green,
+            ),
+            (
+                Role::Number,
+                Color::Rgb(212, 158, 106),
+                Color::Indexed(179),
+                Color::Yellow,
+            ),
+            (
+                Role::Type,
+                Color::Rgb(126, 173, 168),
+                Color::Indexed(109),
+                Color::Cyan,
+            ),
+            (
+                Role::Func,
+                Color::Rgb(129, 161, 193),
+                Color::Indexed(110),
+                Color::LightBlue,
+            ),
         ];
         for (role, truecolor, indexed, named) in expected {
             for (level, want) in [
@@ -1130,7 +1277,7 @@ mod tests {
         assert_eq!(nearest_index((128, 128, 128)), 244);
     }
 
-    const ROLES: [Role; 8] = [
+    const ROLES: [Role; 14] = [
         Role::Text,
         Role::Dim,
         Role::Ok,
@@ -1139,5 +1286,79 @@ mod tests {
         Role::Info,
         Role::Accent,
         Role::Ground,
+        Role::Comment,
+        Role::Keyword,
+        Role::Str,
+        Role::Number,
+        Role::Type,
+        Role::Func,
     ];
+
+    /// The six source-code roles are six different colours at both fidelities
+    /// a terminal is likely to have.
+    ///
+    /// Not a tautology about the table: two roles that resolve to one colour
+    /// would draw a comment and a string identically, which is the defect the
+    /// roles were added to fix, and nothing else in this file would notice.
+    #[test]
+    fn the_six_code_roles_are_six_colours_and_not_four() {
+        let code = [
+            Role::Comment,
+            Role::Keyword,
+            Role::Str,
+            Role::Number,
+            Role::Type,
+            Role::Func,
+        ];
+        for level in [Level::Truecolor, Level::Ansi256, Level::Ansi16] {
+            let palette = Palette::new(level);
+            let mut seen: Vec<Color> = Vec::new();
+            for role in code {
+                let colour = palette.color(role);
+                assert_ne!(
+                    colour,
+                    Color::Reset,
+                    "{role:?} at {level:?} is the terminal's own foreground"
+                );
+                assert!(
+                    !seen.contains(&colour),
+                    "{role:?} repeats a colour at {level:?}"
+                );
+                seen.push(colour);
+            }
+        }
+    }
+
+    /// With no colour at all a comment is still dimmer than the code around
+    /// it, because a modifier is the one separation left when every colour is
+    /// `Reset`. `NO_COLOR`, a pipe and `--print` all reach this level.
+    #[test]
+    fn a_comment_is_dim_even_on_a_terminal_with_no_colour() {
+        let plain = Palette::new(Level::None);
+        assert_eq!(
+            plain.color(Role::Comment),
+            Color::Reset,
+            "no colour to give"
+        );
+        assert!(
+            plain
+                .style(Role::Comment)
+                .add_modifier
+                .contains(Modifier::DIM),
+            "a comment must still be separable"
+        );
+        assert!(
+            !plain
+                .style(Role::Keyword)
+                .add_modifier
+                .contains(Modifier::DIM),
+            "only the comment is dimmed; dimming the code would be worse than nothing"
+        );
+        // And with colour, the modifier stays: a comment is quieter than the
+        // rest whatever the terminal can do.
+        assert!(Palette::new(Level::Truecolor)
+            .style(Role::Comment)
+            .add_modifier
+            .contains(Modifier::DIM));
+    }
 }

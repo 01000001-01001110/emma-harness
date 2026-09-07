@@ -55,6 +55,23 @@ use super::palette::Role;
 /// The two places Emma paints a background. Named rather than open-ended: a
 /// third one has to be added here, and needing an entry in this enum is a
 /// useful speed bump on "just paint a background".
+///
+/// **A known hole: a pair half cannot declare its own sixteen-colour name.**
+/// [`pair_halves`] reads each of `fg`/`bg` through `Value::as_str`, so a half
+/// is only ever a role name (`"accent"`) or a bare hex (`"#eee8d5"`) — never
+/// the `{ "hex": …, "ansi16": … }` object a *role* may be. A half spelled as a
+/// role inherits that role's declared or built-in `ansi16`; a bare hex has no
+/// role to inherit from, so [`half_entry`] falls back to **the built-in
+/// pair's** ansi16 for that half, regardless of what the rest of the theme
+/// looks like. `daylight.json`'s `selection.bg` is a bare hex
+/// (`"#eee8d5"`, a cream), and the built-in `Selection` pair's background
+/// half is `Color::DarkGray` — so on a sixteen-colour terminal `daylight`'s
+/// selection band is a dark band on a light theme, the opposite of the
+/// theme's own point. The fix is not "declare ansi16 on the hex": the schema
+/// has nowhere to put it. What would settle it is extending `pair_halves` to
+/// accept an object for a bare-hex half, the way [`role_entry`] already does
+/// for a role — nobody has done that yet, so this is a limitation, not a bug
+/// in the shipped file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pair {
     /// The `[y]`/`[n]` answer keys on the approval prompt.
@@ -88,7 +105,7 @@ const fn entry(r: u8, g: u8, b: u8, idx: u8, ansi: Color) -> Entry {
 pub struct Theme {
     /// Indexed by [`slot`], so the array order is the `Role` declaration order
     /// and nothing else may assume it.
-    roles: [Entry; 8],
+    roles: [Entry; 14],
     /// `[foreground, background]`. Both halves are always present, which is the
     /// whole reason a background is expressible at all.
     chip: [Entry; 2],
@@ -106,6 +123,12 @@ const fn slot(role: Role) -> usize {
         Role::Info => 5,
         Role::Accent => 6,
         Role::Ground => 7,
+        Role::Comment => 8,
+        Role::Keyword => 9,
+        Role::Str => 10,
+        Role::Number => 11,
+        Role::Type => 12,
+        Role::Func => 13,
     }
 }
 
@@ -136,6 +159,32 @@ pub const BUILTIN: Theme = Theme {
         entry(142, 192, 124, 108, Color::LightCyan),
         entry(245, 84, 143, 204, Color::LightMagenta),
         entry(13, 13, 16, 233, Color::Black),
+        // -- source code ----------------------------------------------------
+        //
+        // Chosen for one job: making a screen of code readable at a glance,
+        // with the comment quiet enough to skip and everything else separable
+        // without being loud. They sit in the same family as the eight above
+        // rather than importing another editor's palette, so a file on the
+        // Code page looks like the rest of Emma and not like a window from
+        // somewhere else.
+        //
+        // A comment is dimmer than `Dim`, deliberately: `Dim` is for chrome a
+        // reader glances at, and a comment is text a reader is choosing not to
+        // read right now.
+        entry(124, 121, 116, 244, Color::DarkGray),
+        // Keyword: the accent's hue, desaturated so a page of `let` and `fn`
+        // does not compete with Emma's own chrome for attention.
+        entry(211, 134, 155, 175, Color::Magenta),
+        // String: green, which is where every reader's expectation already is.
+        entry(152, 172, 116, 107, Color::Green),
+        // Number: warm, and distinct from both string and type.
+        entry(212, 158, 106, 179, Color::Yellow),
+        // Type: the cyan family, matching `Info`, because a type name is the
+        // same kind of noun as a path or a host.
+        entry(126, 173, 168, 109, Color::Cyan),
+        // Function: blue, the one family not otherwise used, so a call reads as
+        // its own thing beside the type it is called on.
+        entry(129, 161, 193, 110, Color::LightBlue),
     ],
     // Dark on the accent: the answer keys, chosen for contrast against the pink
     // rather than for resemblance to anything.
@@ -261,8 +310,8 @@ pub(super) fn derive_index((r, g, b): (u8, u8, u8)) -> u8 {
 //
 // The whole of this section is about failing usefully. Nothing here returns a
 // `Result`, on purpose: the failure policy is partial application, and a `?`
-// anywhere in it would throw away the seven roles that parsed because the
-// eighth did not.
+// anywhere in it would throw away the twelve roles that parsed because the
+// thirteenth did not.
 // ---------------------------------------------------------------------------
 
 /// Names a theme file may not claim. `emma` is the compiled default, and a file
@@ -276,15 +325,24 @@ const RESERVED: [&str; 1] = ["emma"];
 pub const BUILT_IN: &str = RESERVED[0];
 
 /// Every role name a file may use, including the one that is refused — a typo
-/// of `text` should be told about `text`, not about seven names that do not
+/// of `text` should be told about `text`, not about thirteen names that do not
 /// include it.
-const ROLE_NAMES: [&str; 8] = [
-    "text", "dim", "ok", "err", "warn", "info", "accent", "ground",
+const ROLE_NAMES: [&str; 14] = [
+    "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
+    "number", "type", "function",
 ];
 
 /// The settable roles, by the name a file spells them with.
-const SETTABLE: [(&str, Role); 7] = [
+const SETTABLE: [(&str, Role); 13] = [
     ("dim", Role::Dim),
+    // A theme that names none of these keeps the built-in six, so every theme
+    // already written stays valid and gains readable code for free.
+    ("comment", Role::Comment),
+    ("keyword", Role::Keyword),
+    ("string", Role::Str),
+    ("number", Role::Number),
+    ("type", Role::Type),
+    ("function", Role::Func),
     ("ok", Role::Ok),
     ("err", Role::Err),
     ("warn", Role::Warn),
@@ -521,8 +579,8 @@ fn apply_roles(theme: &mut Theme, roles: &serde_json::Value, notices: &mut Vec<S
 /// One role's three values, or `None` when the role keeps the built-in's.
 ///
 /// The granularity is the point: a typo in one hex costs that role and leaves
-/// the other seven applied, because a theme thrown away over one character is a
-/// theme its author cannot debug.
+/// the other twelve of the thirteen settable roles applied, because a theme
+/// thrown away over one character is a theme its author cannot debug.
 fn role_entry(
     name: &str,
     role: Role,
@@ -773,7 +831,7 @@ mod tests {
     use super::*;
     use crate::term::palette::{Level, Palette};
 
-    const ROLES: [Role; 8] = [
+    const ROLES: [Role; 14] = [
         Role::Text,
         Role::Dim,
         Role::Ok,
@@ -782,6 +840,32 @@ mod tests {
         Role::Info,
         Role::Accent,
         Role::Ground,
+        Role::Comment,
+        Role::Keyword,
+        Role::Str,
+        Role::Number,
+        Role::Type,
+        Role::Func,
+    ];
+
+    /// Every theme file this repository ships, by name.
+    ///
+    /// Spelled out rather than discovered, and that is the whole point of it.
+    /// A loop over `names()` cannot notice a theme that has stopped existing —
+    /// it just runs one fewer iteration and stays green. This list turns a
+    /// deleted or renamed file into a failure that says which one.
+    const SHIPPED: [&str; 11] = [
+        "blue",
+        "colorblind-dark",
+        "colorblind-light",
+        "cyberpunk",
+        "daylight",
+        "gray",
+        "green",
+        "nocturne",
+        "noir",
+        "red",
+        "white",
     ];
 
     /// Write `<home>/.emma/themes/<name>.json` and hand back the home.
@@ -960,6 +1044,158 @@ mod tests {
         let (theme, notices) = load(Some(home.path()), None, Some("mine"));
         assert_eq!(theme, BUILTIN);
         assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    /// The six source-code roles, written into a file and read back.
+    ///
+    /// They were settable from the moment they were added to `SETTABLE`, and
+    /// nothing had ever put one in a file and asked what colour came out — the
+    /// claim was believed rather than checked, which is exactly the kind this
+    /// project has been bitten by. A theme that set the other seven and not
+    /// these would leave the Code page painted in the built-in's colours over
+    /// somebody else's palette.
+    #[test]
+    fn a_theme_may_colour_source_code_and_all_six_roles_come_back_changed() {
+        let home = tempfile::tempdir().unwrap();
+        user_theme(
+            home.path(),
+            "src",
+            r##"{ "roles": { "comment": "#111111", "keyword": "#222222",
+                            "string": "#333333", "number": "#444444",
+                            "type": "#555555", "function": "#666666" } }"##,
+        );
+        let (theme, notices) = load(Some(home.path()), None, Some("src"));
+        assert!(notices.is_empty(), "{notices:?}");
+        for (role, rgb) in [
+            (Role::Comment, (0x11, 0x11, 0x11)),
+            (Role::Keyword, (0x22, 0x22, 0x22)),
+            (Role::Str, (0x33, 0x33, 0x33)),
+            (Role::Number, (0x44, 0x44, 0x44)),
+            (Role::Type, (0x55, 0x55, 0x55)),
+            (Role::Func, (0x66, 0x66, 0x66)),
+        ] {
+            // The fixture has to be a colour the built-in is not, or the
+            // assertion below would pass on a role that was never applied.
+            assert_ne!(BUILTIN.rgb(role), rgb, "{role:?}: fixture is the default");
+            assert_eq!(theme.rgb(role), rgb, "{role:?} kept the built-in colour");
+            assert_eq!(theme.indexed(role), derive_index(rgb), "{role:?} at 256");
+            // Inherited, on the same rule as every other role: the file said
+            // nothing about sixteen colours.
+            assert_eq!(theme.ansi16(role), BUILTIN.ansi16(role), "{role:?} at 16");
+        }
+        // …and the seven chrome roles are untouched, which is what makes this
+        // a theme of the *code* rather than a different theme.
+        assert_eq!(theme.rgb(Role::Accent), BUILTIN.rgb(Role::Accent));
+    }
+
+    /// The themes this repository ships, read from the real files.
+    ///
+    /// A fixture agrees with its author; these are the files a cloner gets, so
+    /// they are loaded through `load` exactly as a run loads them. Every role
+    /// is asserted to differ from the built-in's, which is how a theme that
+    /// set the seven chrome roles and forgot the six source ones — or any one
+    /// of the thirteen — turns this red.
+    ///
+    /// The path is the repository's `.emma/`, which is what `harness_root` is:
+    /// the discovered harness *directory*, not the repository root. A themes
+    /// directory at the root would be read by nothing.
+    #[test]
+    fn the_shipped_themes_load_with_nothing_to_report() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.emma");
+        let names = names(None, Some(&root));
+        for want in SHIPPED {
+            assert!(
+                names.iter().any(|n| n == want),
+                "{want} is not in {names:?}"
+            );
+        }
+        // The built-in and nothing else besides: a file added to the directory
+        // and never measured should have to walk past this line.
+        assert_eq!(
+            names.len(),
+            SHIPPED.len() + 1,
+            "the shipped set changed: {names:?}"
+        );
+        for name in names.iter().filter(|n| n.as_str() != BUILT_IN) {
+            let (theme, notices) = load(None, Some(&root), Some(name));
+            assert!(notices.is_empty(), "{name}: {notices:?}");
+            for role in ROLES {
+                if role == Role::Text {
+                    // Not settable, and refused if a file tries.
+                    continue;
+                }
+                assert_ne!(
+                    theme.rgb(role),
+                    BUILTIN.rgb(role),
+                    "{name} leaves {role:?} at the built-in colour"
+                );
+            }
+            // Both pairs declared, and both applied — a pair is refused whole
+            // when it is half-written or resolves to one colour, so this is
+            // also the receipt that neither did.
+            assert_ne!(theme.pair(Pair::Chip), BUILTIN.pair(Pair::Chip), "{name}");
+            assert_ne!(
+                theme.pair(Pair::Selection),
+                BUILTIN.pair(Pair::Selection),
+                "{name}"
+            );
+        }
+    }
+
+    /// Every shipped theme names all thirteen settable roles and both pairs.
+    ///
+    /// Read out of the JSON rather than through [`load`], and the distinction
+    /// is the reason the test exists. A role a file never mentions keeps the
+    /// **built-in's** colour, silently and with no notice — and the built-in
+    /// was chosen against a near-black ground. So a light theme that forgot
+    /// `keyword` loads perfectly, reports nothing, and paints the Code page in
+    /// a colour picked for the opposite background. `load` cannot tell that
+    /// apart from a theme that meant it; the file can, because the key is
+    /// simply absent.
+    ///
+    /// This is the specific way the set could rot: the seven chrome roles are
+    /// what an author thinks of, and the six source ones are what they find out
+    /// about when somebody opens a file.
+    #[test]
+    fn every_shipped_theme_sets_all_thirteen_roles_and_both_pairs() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.emma/themes");
+        for name in SHIPPED {
+            let path = dir.join(format!("{name}.json"));
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let doc: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+            let roles = doc
+                .get("roles")
+                .and_then(serde_json::Value::as_object)
+                .unwrap_or_else(|| panic!("{name} has no roles object"));
+            for (spelling, _) in SETTABLE {
+                assert!(
+                    roles.contains_key(spelling),
+                    "{name} never sets roles.{spelling}, so it inherits the built-in's"
+                );
+            }
+
+            let pairs = doc
+                .get("pairs")
+                .and_then(serde_json::Value::as_object)
+                .unwrap_or_else(|| panic!("{name} has no pairs object"));
+            for pair in ["chip", "selection"] {
+                assert!(pairs.contains_key(pair), "{name} never sets pairs.{pair}");
+            }
+
+            // Every contrast figure claimed for these palettes was measured
+            // against the theme's own `ground`, so a theme with no `about`
+            // naming its intended background is a set of numbers nobody can
+            // re-derive.
+            assert!(
+                doc.get("about")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| s.len() > 20),
+                "{name} has no about naming the background it was measured on"
+            );
+        }
     }
 
     /// The rule that keeps Emma legible on a background nobody here can see.

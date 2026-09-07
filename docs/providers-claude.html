@@ -93,37 +93,36 @@
 
 <p>
   There is a <code>ProviderKind</code> for <code>claude</code> even though
-  nothing behind it ever sends a request, because provider selection is one
-  mechanism and has to stay one: the flag, the settings file, the Settings
-  screen's cycler, the keys row and the per-provider model entry all read the
-  same registry, and a second selection surface beside it would be two places to
-  set this and two places for a bug to hide.
+  nothing behind it ever sends a request. Provider selection has to stay one
+  mechanism: the flag, the settings file, the Settings screen's cycler, the keys
+  row and the per-provider model entry all read the same registry. A second
+  selection surface beside it would give you two places to set this, and two
+  places for a bug to hide.
 </p>
 
 <p>
   The price is an object that cannot pretend. Every request through it fails,
   loudly, naming the branch in <code>main.rs</code> that should have caught the
-  dispatch before anything got there. That is an assertion wearing a trait
-  rather than a half-working client, and it is deliberate: a <code>send</code>
-  that answered prose would make a mis-wired dispatch look like a working one.
-  <span class="chip test">tested</span> the refusal is the thing that gets a
-  test, because a send that ever succeeded would mean Emma's loop had quietly
+  dispatch before anything got there. It is an assertion wearing a trait rather
+  than a half-working client. A <code>send</code> that answered prose would make
+  a mis-wired dispatch look like a working one.
+  <span class="chip test">tested</span> the refusal is what gets the test,
+  because a send that ever succeeded would mean Emma's loop had quietly
   become what drives this engine.
 </p>
 
 <p>
-  It is keyless, like Ollama and for a related reason: the CLI carries its own
-  authentication, so Emma has no credential to store and does not want one. A
-  second copy of a key under <code>~/.emma</code> would be a second thing to
-  rotate and a second thing to leak. That is what makes the keys row read
-  <code>n/a</code>.
+  It is keyless, like Ollama and for a related reason. The CLI carries its own
+  authentication, so there is no credential for Emma to store. A second copy of
+  your key under <code>~/.emma</code> would be a second thing to rotate and a
+  second thing to leak. That is why the keys row reads <code>n/a</code>.
 </p>
 <span class="src">crates/llm/src/claude_cli.rs; crates/emma/src/engine/claude.rs</span>
 
 <h2 id="escalation">The escalation rule</h2>
 
 <p>
-  <strong>Emma hands the child the posture the user handed Emma, and never
+  <strong>Emma hands the child the posture you handed Emma, and never
   more.</strong> The same bit that puts Emma's own gate into skip-everything is
   the only thing that may unlock the child's bypass; without it the child is
   given <code>--permission-mode default</code> positively rather than by
@@ -136,8 +135,8 @@
 <p>
   Under this engine Emma's approval gate does not apply at all. The permission
   system in force is the child's own, and a denial from it ends the goal
-  stalled rather than being retried. A page describing Emma's gate is describing
-  something that is not running for a claude goal.
+  stalled rather than being retried. So if you are reading Emma's consent pages,
+  none of that is running for a claude goal.
   <span class="chip test">tested</span> a denial ends the goal stalled; shown
   red under mutation.
 </p>
@@ -161,12 +160,12 @@
 <p>
   Resolution honours <code>PATHEXT</code>, so a native executable beats a
   <code>.cmd</code> shim, and a shim runs through the command interpreter with a
-  hand-built, caret-escaped command line. Two things were measured on the way to
-  that. The interpreter expands environment variables inside a quoted argument,
-  so a goal mentioning one would splice the user's own paths into the prompt;
-  the quotes are escaped for that reason. And it truncates its command line at
-  the first newline <em>and exits zero</em>, which is silent loss, so a
-  multi-line goal through a shim is refused in words rather than cut.
+  hand-built, caret-escaped command line. The interpreter expands environment
+  variables inside a quoted argument, so a goal mentioning one would splice your
+  own paths into the prompt. That is why the quotes are escaped. It also
+  truncates its command line at the first newline <em>and exits zero</em>, which
+  is silent loss, so a multi-line goal through a shim is refused in words rather
+  than cut.
   <span class="chip cert">certified</span> both measured on Windows 11, with the
   argument round-trip pasted in the port report.
 </p>
@@ -183,10 +182,10 @@
 <p>
   A <code>claude -p</code> child runs with its input closed, so there is no turn
   boundary inside it that a mid-goal steer could land on.
-  <a href="steering.html">Steering</a> still takes what is typed, and the
-  between-goals drain turns it into the next goal, so nothing typed is lost. The
-  queued row has to say <em>that</em> rather than promise a turn that will not
-  come, which is what the steerable flag exists for: under this engine it is
+  <a href="steering.html">Steering</a> still takes what you type, and the
+  between-goals drain turns it into the next goal, so nothing you typed is lost.
+  The queued row has to say <em>that</em> rather than promise a turn that will
+  not come. That is what the steerable flag is for: under this engine it is
   false, and the transcript says &ldquo;queued for after this goal&rdquo;.
   <span class="chip test">tested</span> the two wordings are chosen by that one
   flag.

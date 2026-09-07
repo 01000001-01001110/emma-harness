@@ -323,8 +323,9 @@
 
 <p>
   <span class="chip test">tested</span> <code>tools/lsp</code> makes the same
-  assertion with 5 in
-  <code>the_surface_is_the_four_tools_and_they_share_one_pool</code>. A
+  assertion with 8 in
+  <code>the_surface_is_the_seven_tools_and_they_share_one_pool</code>: seven
+  tools holding a clone of the pool, plus the one the builder returns. A
   <code>strong_count</code> assertion goes red the moment a builder stops
   sharing, and stays green for a caller that bypassed the builder entirely.
   <code>tools/fs</code> has no equivalent count; its sharing is checked

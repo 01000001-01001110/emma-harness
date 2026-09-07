@@ -160,12 +160,12 @@ running it yourself.
 Tools available to the model on every run: `Read`, `Write`, `Edit`, `Glob`,
 `Grep`, `Bash`, `BashOutput`, `KillShell`, `TaskCreate`, `TaskGet`, `TaskList`,
 `TaskUpdate`, `Screenshot`, `FindReferences`, `GoToDefinition`, `Hover`,
-`DocumentSymbols` and `Diagnostics`. Registered only when this machine can back
-them: `Skill`, when the configuration directory declares a skill; `Delegate`,
-when it declares an agent; `WebFetch`, `WebSearch` and the browser tools
-`BrowserOpen`, `BrowserRead`, `BrowserAct`, `BrowserFill` and `BrowserClose`,
-when a Chrome can be found. Search is a results page rendered in that Chrome, so
-it needs no key and no account.
+`DocumentSymbols`, `Diagnostics`, `Completion` and `SignatureHelp`. Registered
+only when this machine can back them: `Skill`, when the configuration directory
+declares a skill; `Delegate`, when it declares an agent; `WebFetch`, `WebSearch`
+and the browser tools `BrowserOpen`, `BrowserRead`, `BrowserAct`, `BrowserFill`
+and `BrowserClose`, when a Chrome can be found. Search is a results page
+rendered in that Chrome, so it needs no key and no account.
 <!-- /diagram -->
 
 `WebSearch` needs no key. It opens a search engine's results page in the same

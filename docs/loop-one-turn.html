@@ -70,9 +70,9 @@
 
   <p class="lede">
     Three guards, a request built from four parts, one model call, and then a
-    fork: either the turn asked for tools, or it did not. This page follows a
-    single iteration of <code>Agent::run_goal</code> from the guard at the top
-    to the message list at the bottom.
+    fork: either the turn asked for tools, or it did not. What follows is one
+    iteration of <code>Agent::run_goal</code>, from the guard at the top to the
+    message list at the bottom.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::call_model</code></span>
 
@@ -103,12 +103,12 @@ let ending = loop {
     self.compact_if_needed(self.last_input, "the request passed the context limit");</code></pre>
 
   <p>
-    Ctrl-C is read first, so a user who interrupts a run that was also out of
-    time is told <code>interrupted</code> rather than <code>deadline</code>.
+    Ctrl-C is read first, so if you interrupt a run that was also out of time
+    you are told <code>interrupted</code>, not <code>deadline</code>.
     <code>iterations &gt;= max_iterations</code> is tested <em>before</em> the
-    call, which is what makes the iteration count a ceiling rather than a
-    tripwire; the token budget below is tested after, and the two are worded
-    differently to the user for that reason. See
+    call, which makes the iteration count a ceiling and not a tripwire. The
+    token budget below is tested after, and the two are worded differently to
+    you for that reason. See
     <a href="loop-budgets.html">Budgets</a>.
     <span class="chip cert">certified</span> by reading the function: these
     four lines are the whole of what runs before <code>Request</code> is built.

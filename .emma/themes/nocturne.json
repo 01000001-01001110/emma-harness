@@ -1,0 +1,23 @@
+{
+  "name": "nocturne",
+  "about": "A cool dark theme: slate rather than the built-in's near-black, and a blue-violet accent rather than pink. Same job, different room.",
+  "roles": {
+    "dim":      { "hex": "#7b899c", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#a3be8c", "ansi16": "light_green" },
+    "err":      { "hex": "#e06c75", "ansi16": "light_red" },
+    "warn":     { "hex": "#ebcb8b", "ansi16": "light_yellow" },
+    "info":     { "hex": "#88c0d0", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#c792ea", "ansi16": "light_magenta" },
+    "ground":   { "hex": "#232733", "ansi16": "black" },
+    "comment":  { "hex": "#6b7688", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#81a1c1", "ansi16": "blue" },
+    "string":   { "hex": "#8fbc8f", "ansi16": "green" },
+    "number":   { "hex": "#d3a06a", "ansi16": "yellow" },
+    "type":     { "hex": "#8fbcbb", "ansi16": "cyan" },
+    "function": { "hex": "#7aa2f7", "ansi16": "light_blue" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#2f3545" }
+  }
+}

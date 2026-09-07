@@ -108,8 +108,8 @@
 
 <p>
   A full dump is often noise on a terminal and never noise to a model. The
-  model is going to reason about the bytes; the human is going to glance at the
-  line while it scrolls past. Collapsing the two means choosing which of them
+  model is going to reason about the bytes. You are going to glance at the line
+  as it scrolls past. Collapsing the two means choosing which of them
   to serve badly, and the choice that tends to get made is the one that keeps
   the terminal readable, which is the one that starves the model.
 </p>
@@ -183,8 +183,8 @@
 
 <p>
   Two rows above illustrate a pattern. <code>Read</code> of an empty file
-  returns a genuinely empty <code>content</code>, not a sentence saying the file
-  is empty, because anything written there would be indistinguishable from file
+  returns a genuinely empty <code>content</code> rather than a sentence saying
+  the file is empty, because anything written there would be indistinguishable from file
   content the next time the model quotes it back. The empty-<code>Grep</code>
   row is the same decision one level up: the fact goes in <code>display</code>,
   where nothing will mistake it for a match.
@@ -248,7 +248,7 @@
   so the <em>model</em> was not left guessing. The human watching the terminal
   was, and so was the runtime's own note, which fell back to a generic sentence
   naming no cap. A truncation legible to one reader and opaque to the other is
-  what the invariant catches; a class-wide test covered the fs tools only.
+  what the invariant catches, and the class-wide test covered the fs tools only.
 </p>
 
 <div class="tw">

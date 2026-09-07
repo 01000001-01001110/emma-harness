@@ -195,9 +195,9 @@ struct PersonaBlock {
   </p>
 
   <p>
-    Selection is a human's, at startup, through <code>EMMA_PERSONA</code> or the
-    spine's <code>default_persona</code>. The refusal that follows is the fourth
-    boot state.
+    You pick one at startup, through <code>EMMA_PERSONA</code> or the spine's
+    <code>default_persona</code>. Nothing else selects a persona. The refusal
+    that follows is the fourth boot state.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>select_persona</code>, the Emma arm</p>
@@ -228,7 +228,7 @@ struct PersonaBlock {
 alpha
 <span class="c">$ emma config check</span>
 Error: …\cfg\up\.emma\config.json: no `default_persona`, but …\cfg\up\.emma\personas contains alpha</code></pre>
-  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16. The message names the directory and lists what is in it. That is all an operator needs to fix it.
+  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16. The message names the directory and lists what is in it, which is everything you need to fix it.
 
   <p>
     One directory name under <code>personas/</code> is not a persona.
@@ -312,10 +312,10 @@ tool schema    a9d5576f61f37d0c</code></pre>
   <span class="chip cert">certified</span>: release binary, 2026-08-16. Twenty-one tools registered, two survive the filter, and the schema hash differs from the unfiltered <code>ce26c5f39467e4f0</code> this repository reports. The registry has changed since: the same command today registers twenty-three, or sixteen without a Chrome, and the <code>WebSearch</code> in the run above needs that Chrome rather than a key since 2026-09-05. The run above is kept as it was observed rather than restated, because the filtering it demonstrates is the point and the total is not. Line-wrapped for the page; the error is one line.
 
   <p>
-    The rebuilt registry iterates the original in <em>registry</em> order rather
-    than allowlist order. The tool schema rides in the prompt prefix that the
-    provider caches as an exact byte match, so the order an operator happened to
-    type their list in must not decide the bytes.
+    The rebuilt registry iterates the original in <em>registry</em> order, not
+    allowlist order. The tool schema rides in the prompt prefix that the provider
+    caches as an exact byte match, so the order you happened to type your list in
+    must not decide the bytes.
   </p>
 
   <h2 id="hooks">The <code>hooks</code> block</h2>
@@ -433,10 +433,9 @@ Caused by:
   <span class="src">crates/harness/src/hooks.rs — <code>resolve</code></span>
 
   <p>
-    <code>timeout_ms</code> is what an operator writes and is not what runs. The
-    default is five seconds and config asking for more is silently reduced to ten
-    rather than refused, because the operator asked for a longer gate rather than
-    for a different program.
+    <code>timeout_ms</code> is what you write and is not what runs. The default
+    is five seconds, and asking for more is silently reduced to ten instead of
+    refused, because you asked for a longer gate, not for a different program.
   </p>
 
   <p class="faint">crates/harness/src/hooks.rs · the caps</p>
@@ -490,8 +489,8 @@ const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;</code></pre>
   <p>
     Canonicalising before the prefix test is what makes <code>..</code> useless
     rather than merely discouraged. The executable-bit check is not the boundary:
-    its own doc says so, and calls it a way of catching the operator who forgot
-    to <code>chmod +x</code> before that surfaces much later as a spawn failure
+    its own doc says so, and calls it a way of catching you when you forgot to
+    <code>chmod +x</code>, before that surfaces much later as a spawn failure
     that reads like something else.
   </p>
 
@@ -570,8 +569,8 @@ const STATUS_TIMEOUT_MS: u64 = 2_000;</code></pre>
 
   <p>
     Each of those refusals has a test that pins the sentence rather than only the
-    failure, and the tests say why: an operator who copied a working Claude Code
-    config is not wrong, only unportable, so the message has to say what to do
+    failure, and the tests say why. If you copied a working Claude Code config
+    you are not wrong, only unportable, so the message has to say what to do
     instead.
     <span class="chip test">tested</span>:
     <code>a_status_line_of_a_type_emma_cannot_run_is_named_rather_than_guessed</code>,
@@ -586,8 +585,8 @@ const STATUS_TIMEOUT_MS: u64 = 2_000;</code></pre>
   <p>
     What such a program is <em>told</em>, and the rule that a field Emma cannot
     measure is absent from the JSON rather than zero in it, is
-    <a href="terminal.html">The terminal</a>; it is a display contract rather
-    than a configuration one.
+    <a href="terminal.html">The terminal</a>. That is a display contract, not a
+    configuration one.
   </p>
 
   <h2 id="permissions">The <code>permissions</code> block, and the local file</h2>
@@ -595,8 +594,8 @@ const STATUS_TIMEOUT_MS: u64 = 2_000;</code></pre>
   <p>
     The harness reads permission rules and does not understand them. Each one
     comes out tagged with the list it was in and the file it was written in,
-    because the two sentences an operator needs when a rule does not fire are
-    "which file" and "which list".
+    because the two things you need to know when a rule does not fire are which
+    file and which list.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>PermissionBlock</code>, <code>PermissionEntry</code></p>
@@ -629,16 +628,16 @@ pub struct PermissionEntry {
 
   <p>
     <strong>This one block inside the strict file is permissive</strong>, and it
-    has to be: <code>defaultMode</code> and <code>additionalDirectories</code>
+    has to be. <code>defaultMode</code> and <code>additionalDirectories</code>
     are real keys in real files that Emma has no opinion about. So a typo inside
     <code>permissions</code> is silence even in <code>.emma/config.json</code>,
-    while a typo one level up is a load error. That is the one place in Emma's
-    own format where the strictness stops.
+    while a typo one level up is a load error. It is the one place in Emma's own
+    format where the strictness stops.
   </p>
 
   <p>
-    Rules come out in deny, then ask, then allow order. That is the order they
-    are consulted in. Nothing depends on it; it means a debug print reads in
+    Rules come out in deny, then ask, then allow order, which is the order they
+    are consulted in. Nothing depends on it. It means a debug print reads in
     precedence order.
   </p>
 

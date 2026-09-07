@@ -285,7 +285,7 @@ fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
     rather than the literal 4,096, so adding a higher row cannot leave the
     constant behind; then it asserts an unknown model gets no markers on a
     roughly 700-token prefix, and gets them back once the prefix clears 4,096.
-    That is a gate, not a refusal. <span class="chip test">tested</span>
+    So it is a gate rather than a refusal. <span class="chip test">tested</span>
   </p>
 
   <figure>
@@ -381,7 +381,7 @@ fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
     through to the unknown fallback. <span class="chip test">tested</span>
   </p>
 
-  <h2 id="two-tables">Why there are two tables and not one</h2>
+  <h2 id="two-tables">Why there are two tables</h2>
 
   <p>
     <code>models::TABLE</code> and <code>anthropic::MIN_CACHEABLE</code> name
@@ -499,7 +499,7 @@ assert!(
 
   <p>
     The pages on this site do not pick a side, because picking one would put a
-    number in front of a reader that nobody has seen. The observed bisection
+    number in front of you that nobody has seen. The observed bisection
     above is consistent with both readings: it recorded
     <code>cache_creation = 0</code>, and did not record what
     <code>input_tokens</code> did.

@@ -103,36 +103,58 @@
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; <code>Entry</code>, <code>Theme</code></p>
-  <pre><code><span class="c">/// One role at all three fidelities. Which one is used is [`super::palette`]'s</span>
+<!-- quote:entry -->
+<pre><code><span class="c">/// One role at all three fidelities. Which one is used is [`super::palette`]'s</span>
 <span class="c">/// decision, made after this — a theme supplies the values and never chooses</span>
 <span class="c">/// between them, which is what keeps `NO_COLOR` and a 16-colour terminal out of</span>
 <span class="c">/// a theme author's reach.</span>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Entry {
-    rgb: (u8, u8, u8),
-    idx: u8,
+<span class="k">struct</span> Entry {
+    rgb: (<span class="k">u8</span>, <span class="k">u8</span>, <span class="k">u8</span>),
+    idx: <span class="k">u8</span>,
     ansi: Color,
 }
 
-<span class="w">…</span>
+<span class="c">// …</span>
 
 <span class="c">/// A theme, resolved. Fixed-size and `Copy` — see the module doc for why that</span>
 <span class="c">/// is a constraint rather than a preference.</span>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Theme {
+<span class="k">pub</span> <span class="k">struct</span> Theme {
     <span class="c">/// Indexed by [`slot`], so the array order is the `Role` declaration order</span>
     <span class="c">/// and nothing else may assume it.</span>
-    roles: [Entry; 8],
+    roles: [Entry; 14],
     <span class="c">/// `[foreground, background]`. Both halves are always present, which is the</span>
     <span class="c">/// whole reason a background is expressible at all.</span>
     chip: [Entry; 2],
     selection: [Entry; 2],
+}
+
+<span class="c">/// Where a role sits in [`Theme::roles`].</span>
+<span class="k">const</span> <span class="k">fn</span> slot(role: Role) -&gt; <span class="k">usize</span> {
+    <span class="k">match</span> role {
+        Role::Text =&gt; 0,
+        Role::Dim =&gt; 1,
+        Role::Ok =&gt; 2,
+        Role::Err =&gt; 3,
+        Role::Warn =&gt; 4,
+        Role::Info =&gt; 5,
+        Role::Accent =&gt; 6,
+        Role::Ground =&gt; 7,
+        Role::Comment =&gt; 8,
+        Role::Keyword =&gt; 9,
+        Role::Str =&gt; 10,
+        Role::Number =&gt; 11,
+        Role::Type =&gt; 12,
+        Role::Func =&gt; 13,
+    }
 }</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>Entry</code>, <code>Theme</code>, <code>slot</code></span>
 
   <p>
-    <code>slot(role)</code> is a <code>const fn</code> mapping the eight roles
-    onto array indices, and the field comment insists nothing else may assume
+    <code>slot(role)</code> is a <code>const fn</code> mapping the fourteen
+    roles onto array indices, and the field comment insists nothing else may assume
     the order. Six accessors read it: <code>rgb</code>, <code>indexed</code>,
     <code>ansi16</code>, <code>pair</code>, and the private
     <code>halves</code>/<code>halves_mut</code>. <code>Pair</code> is a
@@ -172,13 +194,15 @@ pub struct Theme {
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; the tail of <code>role_entry</code></p>
-  <pre><code>    Some(Entry {
-        rgb,
-        idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
-        <span class="c">// Inherited, never derived. Distance at sixteen colours is exactly how</span>
-        <span class="c">// an accent becomes the colour that means failure.</span>
-        ansi: declared_ansi.unwrap_or(inherited.ansi),
-    })</code></pre>
+<!-- quote:role-entry-tail -->
+<pre><code>Some(Entry {
+    rgb,
+    idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
+    <span class="c">// Inherited, never derived. Distance at sixteen colours is exactly how</span>
+    <span class="c">// an accent becomes the colour that means failure.</span>
+    ansi: declared_ansi.unwrap_or(inherited.ansi),
+})</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>role_entry</code>, <code>derive_index</code></span>
 
   <p>
@@ -203,27 +227,36 @@ pub struct Theme {
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs &middot; inside <code>apply_roles</code></p>
-  <pre><code>        <span class="k">if</span> name == "text" {
-            notices.push(
-                "roles.text is not settable: body text is the terminal's own foreground, and a \
-                 foreground chosen against one background is invisible on the opposite one — \
-                 which the person it breaks for reads as Emma being broken, not the theme"
-                    .to_string(),
-            );
-            <span class="k">continue</span>;
-        }</code></pre>
+<!-- quote:text-is-not-settable -->
+<pre><code><span class="k">if</span> name == <span class="s">"text"</span> {
+    notices.push(
+        <span class="s">"roles.text is not settable: body text is the terminal's own foreground, and a \
+         foreground chosen against one background is invisible on the opposite one — \
+         which the person it breaks for reads as Emma being broken, not the theme"</span>
+            .to_string(),
+    );
+    <span class="k">continue</span>;
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>apply_roles</code>, <code>ROLE_NAMES</code>, <code>SETTABLE</code></span>
 
   <p>
-    <code>ROLE_NAMES</code> lists all eight names including the refused one, and
-    <code>SETTABLE</code> lists the seven that work. The split exists so that
-    <em>&ldquo;a typo of <code>text</code> should be told about
-    <code>text</code>, not about seven names that do not include it.&rdquo;</em>
-    <span class="chip test">tested</span> twice:
+    <code>ROLE_NAMES</code> lists all fourteen names including the refused one,
+    and <code>SETTABLE</code> lists the thirteen that work. The split exists so
+    that <em>&ldquo;a typo of <code>text</code> should be told about
+    <code>text</code>, not about thirteen names that do not include
+    it.&rdquo;</em>
+    <strong>A theme that names none of the six source-code roles keeps the
+    built-in six</strong>, so every theme file already written stays valid and
+    gains readable code for nothing.
+    <span class="chip test">tested</span> three times:
     <code>a_theme_cannot_colour_ordinary_text</code> checks the refusal is
-    spoken and that the rest of the file still applied, and
+    spoken and that the rest of the file still applied,
     <code>a_misspelled_role_is_told_what_the_roles_are</code> walks every
-    element of <code>ROLE_NAMES</code> and demands it appears in the message.
+    element of <code>ROLE_NAMES</code> and demands it appears in the message,
+    and <code>a_theme_may_colour_source_code_and_all_six_roles_come_back_changed</code>
+    writes all six into a temporary theme and reads each colour back, then
+    asserts the seven chrome roles were left alone.
   </p>
 
   <p>
@@ -235,16 +268,18 @@ pub struct Theme {
     fidelity</strong>, checked on the resolved values rather than on the hexes:
   </p>
 
-  <pre><code>    <span class="k">if</span> halves[0].rgb == halves[1].rgb
-        || halves[0].idx == halves[1].idx
-        || halves[0].ansi == halves[1].ansi
-    {
-        notices.push(format!(
-            "pairs.{name} resolves to the same colour on both halves at one of the three \
-             fidelities, which would draw it invisible; the built-in pair is kept"
-        ));
-        <span class="k">return</span> None;
-    }</code></pre>
+<!-- quote:pair-collision -->
+<pre><code><span class="k">if</span> halves[0].rgb == halves[1].rgb
+    || halves[0].idx == halves[1].idx
+    || halves[0].ansi == halves[1].ansi
+{
+    notices.push(format!(
+        <span class="s">"pairs.{name} resolves to the same colour on both halves at one of the three \
+         fidelities, which would draw it invisible; the built-in pair is kept"</span>
+    ));
+    <span class="k">return</span> None;
+}</code></pre>
+<!-- /quote -->
   <span class="src">crates/emma/src/term/theme.rs — <code>pair_halves</code></span>
 
   <p>
@@ -270,7 +305,7 @@ pub struct Theme {
   <p>
     Nothing in the loader returns a <code>Result</code>, and the region comment
     says why in one sentence: <em>&ldquo;a <code>?</code> anywhere in it would
-    throw away the seven roles that parsed because the eighth did not.&rdquo;</em>
+    throw away the twelve roles that parsed because the thirteenth did not.&rdquo;</em>
     The policy follows <code>harness/src/statusline.rs</code> rather than the
     harness's refuse-to-start rule, on the ground that every distinction a theme
     touches is made a second time in glyphs.
@@ -283,7 +318,7 @@ pub struct Theme {
         <tr><td>Nothing selected</td><td>The built-in, silently. <code>load(None, None, None)</code> is <code>(BUILTIN, [])</code>.</td></tr>
         <tr><td>Selected name not found</td><td>The built-in, and a notice naming <em>both</em> directories searched.</td></tr>
         <tr><td>Not JSON, or not a JSON object</td><td>The built-in, and a notice. serde's <code>line</code> and <code>column</code> are passed through verbatim rather than paraphrased, because the position is the whole of what the user needs.</td></tr>
-        <tr><td>A bad hex on one role</td><td>That role only. The other seven apply.</td></tr>
+        <tr><td>A bad hex on one role</td><td>That role only. The other twelve of the thirteen settable roles apply.</td></tr>
         <tr><td>An out-of-range <code>ansi256</code></td><td>The declared index; the hex survives and the index is derived instead.</td></tr>
         <tr><td>An unrecognised <code>ansi16</code> name</td><td>The declared name; the built-in role's name is kept.</td></tr>
         <tr><td>An unknown top-level key</td><td>Noted and ignored, <em>&ldquo;so a build that adds a key should not make the file unreadable to the build beside it.&rdquo;</em></td></tr>
@@ -561,8 +596,13 @@ pub struct Theme {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>theme.rs</code> is 1,211 lines and was read in full for this page,
-    tests included. It declares 19 function items above the test boundary:
+    <span class="chip unv">unverified</span> <code>theme.rs</code> was 1,211
+    lines and read in full when this page was written, tests included. It is
+    <strong>1,393 lines</strong> now (<code>wc -l</code>, 2026-09-06) &mdash;
+    the six source-code roles landed the same day this paragraph counts as
+    absent above, so the growth is expected, but the function list below was
+    not re-walked against it. It declares 19 function items above the test
+    boundary:
     <code>entry</code>, <code>slot</code>, six <code>Theme</code> accessors,
     <code>derive_index</code>, <code>load</code>, <code>apply</code>,
     <code>apply_roles</code>, <code>role_entry</code>,

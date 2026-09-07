@@ -261,6 +261,10 @@ pub struct LspRow {
     /// The language table's `network` flag: this server may reach the network
     /// while answering. It decides which honest notice the row carries.
     pub network: bool,
+    /// Declared in `settings.json` under `lsp.servers` rather than built in.
+    /// Shown, because "Emma chose this server" and "you named this program" are
+    /// different claims and the row is the same shape either way.
+    pub user_declared: bool,
 }
 
 /// What the no-spawn look found. This is `server::Presence` flattened to what
@@ -283,10 +287,14 @@ pub enum LspFound {
 /// read as working. `found` means a file is on disk; see [`NOTICE_LSP_FOUND`].
 pub fn lsp_value(row: &LspRow) -> String {
     let on = if row.enabled { "On" } else { "Off" };
+    // A third dimension for the declared ones, and only for them: a row that
+    // said `On, found` with nothing else would credit Emma with a choice it did
+    // not make.
+    let who = if row.user_declared { ", declared" } else { "" };
     match &row.found {
-        LspFound::Found => format!("{on}, found"),
-        LspFound::Needs(launcher) => format!("{on}, needs {launcher}"),
-        LspFound::Absent => format!("{on}, absent"),
+        LspFound::Found => format!("{on}, found{who}"),
+        LspFound::Needs(launcher) => format!("{on}, needs {launcher}{who}"),
+        LspFound::Absent => format!("{on}, absent{who}"),
     }
 }
 
@@ -409,6 +417,28 @@ pub const NOTICE_CONTEXT_ABSENT: &str = "No number yet: the meter reads the prov
      from the last call, so it is set by the first model call of the run and not before";
 pub const NOTICE_OUTPUT_CAP: &str = "Emma has no output-token setting; --max-tokens is the \
      per-goal spend budget shown below it, not a cap on one response";
+/// What the Theme row says when there is exactly one theme to say it about.
+///
+/// **This is the sentence a reported defect bought.** The owner said "I cannot
+/// change the theme". He could not: a theme is a file, this repository shipped
+/// none, his `~/.emma/themes` did not exist, and so the list the row cycles had
+/// one entry in it. `theme_step` stepped it — `themes[(i + dir).rem_euclid(1)]`
+/// is always `themes[0]` — the row wrote `emma` over `emma`, and reported
+/// *written to …; in force from the next start*. A control that appears to
+/// work, does nothing, and prints a receipt saying it worked; the stepping was
+/// never the broken part.
+///
+/// So the row stops being a cycler when there is nothing to cycle to, and this
+/// says where a second theme comes from. It names `~/.emma/themes` only,
+/// because that is the one directory this screen's list is built from —
+/// `app.rs` passes `None` for the harness root, so a theme under a project's
+/// own `.emma/themes` is selectable by `/theme <name>` and is not in this row.
+/// Saying "add a file to either directory" here would be the same class of
+/// mistake in prose that the cycler was in pixels.
+pub const NOTICE_THEME_ONE: &str = "emma, the built-in, is the only theme this screen can see, \
+     so there is nothing to step to. A theme is a JSON file: this row lists the *.json in \
+     ~/.emma/themes, and one appears here the run after it is dropped there. A theme in the \
+     project's own .emma/themes is reachable by /theme <name> and not by this row";
 /// Why the Accent row's chevrons walk five names and no more.
 ///
 /// A `cube:N` accent is a real stored value — `palette::parse_accent` reads
@@ -446,10 +476,17 @@ pub const DESC_SAMPLING: &str = "Temperature, Max Output Tokens and Streaming ed
      once when the provider is built, so a change binds the next run.";
 /// The APPEARANCE description.
 ///
-/// Five mechanisms on one card and each named, because they really are five:
-/// two repaint, two wait for a restart, and two leave the process entirely to
-/// ask another application for something.
-pub const DESC_APPEARANCE: &str = "Theme and Accent repaint now. Glyphs is read once at \
+/// Five mechanisms on one card, and named individually because the row-by-row
+/// truth does not sort into two neat piles. **Only Accent repaints now.**
+/// `settings_accent` calls `palette::activate_accent_choice`, which updates
+/// the process-global accent every live `Palette` reads on its next draw —
+/// see `app.rs`. `settings_theme` does the opposite: it writes the name to
+/// `settings.json` and nothing else, because `main.rs` resolves the theme
+/// once, before the terminal exists, and there is no live `Theme` for a
+/// mid-session write to reach. The row's own receipt says so — *"in force
+/// from the next start"* — and this sentence used to contradict the row
+/// directly above it.
+pub const DESC_APPEARANCE: &str = "Accent repaints now. Theme, like Glyphs, is read once at \
      startup, so it applies to the next run. Font Family and Font Size store the value always \
      and ask the terminal to change its own font where it has a way to be asked. Status Bar \
      and Interface Hints are stored and read by nothing yet; each receipt says so.";
@@ -859,7 +896,17 @@ fn cards(s: &SettingsView) -> Vec<Card> {
         Card::new(
             "3. APPEARANCE",
             vec![
-                kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle),
+                // Chevrons only where there is a second name behind them. On a
+                // list of one, ←/→ resolve to the name already on the row and
+                // the shell writes it and says so — see [`NOTICE_THEME_ONE`]
+                // for what that cost. `> 1` rather than `!is_empty()` because
+                // one is the case that actually happens: `theme::names` always
+                // returns the built-in.
+                if s.themes.len() > 1 {
+                    kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle)
+                } else {
+                    kv("Theme", Plain(title_case(&s.theme)), Note(NOTICE_THEME_ONE))
+                },
                 kv(
                     "Accent Color",
                     Cycler(accent_label(&s.accent)),
@@ -1838,6 +1885,25 @@ fn activate(v: &mut SettingsView) -> SettingsAction {
 /// An empty list answers with the built-in rather than panicking on a modulus
 /// by zero. `theme::names` cannot return one; a caller that built the view by
 /// hand can.
+///
+/// **This is not where the reported defect lived, and this function has not
+/// changed to fix it.** With one theme, `n == 1` and
+/// `(i + dir).rem_euclid(1)` is always `0`: `themes[0]` steps to `themes[0]`,
+/// harmlessly, the same answer this arithmetic has always given for a list of
+/// one. That was never wrong — a cycler over one name has nothing else to
+/// return. What was wrong is `cards()` calling this a [`RowKind::ThemeCycle`]
+/// at all when `themes.len() == 1`: a row drawn with chevrons and a receipt
+/// that says "written" when nothing could have moved. The fix is upstream —
+/// `cards()` now draws that row [`Value::Plain`] with [`RowKind::Note`]
+/// carrying [`NOTICE_THEME_ONE`] instead — which makes the `n == 1` branch
+/// below unreachable from a real key press: [`cycle`] only calls this
+/// function after `focused_kind` has matched `ThemeCycle`, and that variant
+/// no longer exists on a one-theme screen. It stays in the function, rather
+/// than becoming a `debug_assert!(themes.len() > 1)`, because a direct call
+/// with one name is not a contract violation — see
+/// `one_theme_is_stated_on_the_row_rather_than_cycled` for why a single-entry
+/// list is a state this module still has to describe correctly, just not
+/// through this row kind.
 fn theme_step(themes: &[String], current: &str, dir: isize) -> String {
     if themes.is_empty() {
         return "emma".to_string();
@@ -2278,6 +2344,10 @@ mod tests {
             cwd: "~/projects/research".into(),
             provider: "ollama".into(),
             theme: "dracula".into(),
+            // Two names, because the row is only a cycler when there is
+            // somewhere to cycle to — a fixture with an empty list describes a
+            // screen `theme::names` cannot produce.
+            themes: vec!["emma".into(), "dracula".into()],
             memory_on: true,
             prune_on: false,
             test: TestState::Ok,
@@ -2372,6 +2442,7 @@ mod tests {
             enabled,
             found,
             network,
+            user_declared: false,
         };
         vec![
             row("Rust", true, LspFound::Absent, false),
@@ -2777,6 +2848,71 @@ mod tests {
             handle_key(&mut v, press(KeyCode::Enter)),
             SettingsAction::Theme("oxide".to_string()),
             "Enter cycles forward too"
+        );
+    }
+
+    /// The reported defect: with one theme on disk the row drew chevrons,
+    /// ←/→ resolved to the name already showing, and the shell reported a
+    /// write. Nothing about the stepping was wrong — the row was.
+    ///
+    /// Three assertions because three things had to stop: the row is no longer
+    /// a `ThemeCycle`, no chevron is painted around the name, and the key that
+    /// used to produce a write now produces the sentence.
+    #[test]
+    fn one_theme_is_stated_on_the_row_rather_than_cycled() {
+        let mut v = view();
+        v.themes = vec!["emma".into()];
+        v.theme = "emma".into();
+
+        let (slot, _, kind) = rows_of(&v, 2)
+            .into_iter()
+            .find(|(_, label, _)| label == "Theme")
+            .expect("the Appearance card has a Theme row");
+        assert_eq!(
+            kind,
+            RowKind::Note(NOTICE_THEME_ONE),
+            "a cycler over a list of one"
+        );
+
+        let all = draw(&v, 130, 60).join("\n");
+        assert!(
+            !all.contains("‹ Emma ›"),
+            "chevrons drawn with nothing behind them"
+        );
+        assert!(all.contains("Emma"), "the theme in force is not on the row");
+
+        focus(&mut v, 2, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::FocusChanged,
+            "→ still asked the shell to write a theme"
+        );
+        assert_eq!(v.notice.as_deref(), Some(NOTICE_THEME_ONE));
+        assert!(
+            NOTICE_THEME_ONE.contains("~/.emma/themes"),
+            "the sentence does not say where a theme file goes"
+        );
+    }
+
+    /// The APPEARANCE card's description used to say "Theme and Accent
+    /// repaint now" directly above a Theme row whose own receipt says "in
+    /// force from the next start" — `settings_theme` (`app.rs`) only ever
+    /// writes `settings.json`, because `main.rs` resolves the theme once
+    /// before the terminal exists. `settings_accent` really does call
+    /// `palette::activate_accent_choice`, which a live `Palette` reads on its
+    /// next draw, so the two rows are not the same claim and the description
+    /// must not flatten them into one.
+    #[test]
+    fn the_appearance_card_does_not_claim_the_theme_repaints_now() {
+        assert!(
+            !DESC_APPEARANCE.contains("Theme and Accent repaint"),
+            "the card claims Theme repaints, contradicting the row's own \
+             \"in force from the next start\" receipt: {DESC_APPEARANCE}"
+        );
+        assert!(
+            DESC_APPEARANCE.contains("Accent repaints"),
+            "the one row that really does take effect immediately should say so: \
+             {DESC_APPEARANCE}"
         );
     }
 
@@ -3446,6 +3582,7 @@ mod tests {
             enabled,
             found,
             network: false,
+            user_declared: false,
         };
         assert_eq!(lsp_value(&row(true, LspFound::Found)), "On, found");
         assert_eq!(lsp_value(&row(true, LspFound::Absent)), "On, absent");
@@ -3455,6 +3592,14 @@ mod tests {
         );
         assert_eq!(lsp_value(&row(false, LspFound::Found)), "Off, found");
         assert_eq!(lsp_value(&row(false, LspFound::Absent)), "Off, absent");
+
+        // And the third dimension, which only a server named in settings.json
+        // has: the row must not credit Emma with having chosen it.
+        let declared = LspRow {
+            user_declared: true,
+            ..row(true, LspFound::Found)
+        };
+        assert_eq!(lsp_value(&declared), "On, found, declared");
     }
 
     /// The whole point of the card, on the buffer: an enabled language with

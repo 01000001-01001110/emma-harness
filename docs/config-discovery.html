@@ -458,14 +458,16 @@ fn home_dir() -&gt; Option&lt;PathBuf&gt; {
 
   <p>
     <code>configured_by_hand</code> checks for <code>config.json</code> or
-    <code>personas/</code> only.
-    <code>config.json</code> and <code>personas/</code> are written by a person;
+    <code>personas/</code> only. Those two you wrote.
     <code>credentials.json</code>, <code>sessions/</code> and
     <code>settings.json</code> are written by Emma, and a directory Emma created
     for its own bookkeeping says nothing about how Emma should be configured.
-    Note where this lands a home directory holding only Emma's own files: not in
-    the empty-harness boot, which is a real state with its own behaviour, but in
-    the absent case. The walk goes past it and the operator gets the refusal.
+  </p>
+
+  <p>
+    Watch where that lands a home directory holding only Emma's own files. It is
+    the absent case, not the empty-harness boot, which is a real state with its
+    own behaviour. The walk goes straight past it and you get the refusal.
   </p>
 
   <h2 id="override">Overriding the walk</h2>

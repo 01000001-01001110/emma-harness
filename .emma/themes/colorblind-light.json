@@ -1,0 +1,23 @@
+{
+  "name": "colorblind-light",
+  "about": "For a light terminal, measured against #fbfbfb. Same rule as its dark twin and the same shared vocabulary — `string`, `number` and `function` are the same colours as `ok`, `warn` and `err`, so the status triple inherits the separation proved for the source six. A near-white ground is the harder of the two cases: it squeezes every legible colour into a narrow band of lightness, and both of this file's odd-looking choices come from that. `warn` is a dark umber because err and warn collapse onto one colour under deuteranopia and only lightness could separate them; `comment` is darker than a comment ought to be because a desaturated grey and a mid green also collapse under deuteranopia, and darker was the only direction left. Worst separation over normal vision and all three simulations is dE*ab 26.",
+  "roles": {
+    "dim":      { "hex": "#5c6672", "ansi16": "black" },
+    "ok":       { "hex": "#168360", "ansi16": "green" },
+    "err":      { "hex": "#da2b10", "ansi16": "red" },
+    "warn":     { "hex": "#3c2915", "ansi16": "yellow" },
+    "info":     { "hex": "#0072b2", "ansi16": "blue" },
+    "accent":   { "hex": "#a1457f", "ansi16": "magenta" },
+    "ground":   { "hex": "#fbfbfb", "ansi16": "white" },
+    "comment":  { "hex": "#45495e", "ansi16": "black" },
+    "keyword":  { "hex": "#8c2aac", "ansi16": "magenta" },
+    "string":   { "hex": "#168360", "ansi16": "green" },
+    "number":   { "hex": "#3c2915", "ansi16": "yellow" },
+    "type":     { "hex": "#1630d4", "ansi16": "cyan" },
+    "function": { "hex": "#da2b10", "ansi16": "red" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#ecedf0" }
+  }
+}

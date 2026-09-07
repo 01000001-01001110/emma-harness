@@ -1,6 +1,6 @@
 //! Emma's code-intelligence tool surface: `FindReferences`, `GoToDefinition`,
-//! `Hover`, `DocumentSymbols`, `Diagnostics` — a language server's answers
-//! instead of text search.
+//! `Hover`, `DocumentSymbols`, `Diagnostics`, `Completion` and `SignatureHelp`
+//! — a language server's answers instead of text search.
 //!
 //! `Grep` finds a name. It cannot tell a call from a comment, does not know that
 //! `Config` here is the type declared over there, and cannot answer "what breaks
@@ -81,8 +81,8 @@
 //!
 //! **`WorkspaceSymbols` — cut.** Cheap to add and genuinely useful, and left out
 //! for one reason: it is the query most sensitive to a partial index, and it has
-//! no per-file anchor that would let a caller sanity-check the answer. Four
-//! tools that are right beat five where one is subtly thin. It is the obvious
+//! no per-file anchor that would let a caller sanity-check the answer. Seven
+//! tools that are right beat eight where one is subtly thin. It is the obvious
 //! next thing to add.
 //!
 //! # The layers
@@ -92,7 +92,7 @@
 //! correlation, death. [`pool`] owns the clients and the crash accounting.
 //! [`doc`] converts paths to URIs and "the symbol on line 42" to a position.
 //! [`render`] is everything the model reads. [`lang`] is the table every other
-//! module reads. [`tools`] is five thin shells over all of it.
+//! module reads. [`tools`] is seven thin shells over all of it.
 
 use std::sync::Arc;
 
@@ -111,7 +111,9 @@ pub mod tools;
 pub use client::{Client, Readiness};
 pub use pool::Pool;
 pub use server::Server;
-pub use tools::{Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover};
+pub use tools::{
+    Completion, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, SignatureHelp,
+};
 
 /// The whole surface, wired to one pool serving the default language set.
 ///
@@ -121,11 +123,11 @@ pub use tools::{Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Ho
 ///
 /// **This is the only supported way to build the set.** `ToolCtx` carries no
 /// session state, so the pool lives in the tool structs, and the invariant "all
-/// five share one pool" is a wiring convention rather than something the type
-/// system holds. Five tools built with five pools is five language servers
+/// seven share one pool" is a wiring convention rather than something the type
+/// system holds. Seven tools built with seven pools is seven language servers
 /// indexing the same workspace, and it compiles. The same known defect
 /// `tools/fs` records about its read tracker, recorded here for the same reason:
-/// cheaper to notice at five tools than at fourteen.
+/// cheaper to notice at seven tools than at fourteen.
 pub fn lsp_tools() -> (Vec<Arc<dyn Tool>>, Arc<Pool>) {
     lsp_tools_with(lang::DEFAULT_ENABLED.iter().map(|s| s.to_string()))
 }
@@ -150,6 +152,11 @@ pub fn lsp_tools_with(
         Arc::new(Hover::new(pool.clone())),
         Arc::new(DocumentSymbols::new(pool.clone())),
         Arc::new(Diagnostics::new(pool.clone())),
+        // The two that answer about a *point* rather than a symbol, and the two
+        // that make this surface usable while writing code rather than only
+        // while reading it.
+        Arc::new(Completion::new(pool.clone())),
+        Arc::new(SignatureHelp::new(pool.clone())),
     ];
     (tools, pool)
 }
@@ -159,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_surface_is_the_five_tools_and_they_share_one_pool() {
+    fn the_surface_is_the_seven_tools_and_they_share_one_pool() {
         let (tools, pool) = lsp_tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(
@@ -169,13 +176,17 @@ mod tests {
                 "GoToDefinition",
                 "Hover",
                 "DocumentSymbols",
-                "Diagnostics"
+                "Diagnostics",
+                "Completion",
+                "SignatureHelp",
             ]
         );
-        // One pool, five tools holding it, plus the one returned: six strong
+        // One pool, seven tools holding it, plus the one returned: eight strong
         // references. The assertion is the sharing invariant `lsp_tools`
-        // promises, which nothing else can check.
-        assert_eq!(Arc::strong_count(&pool), 6);
+        // promises, which nothing else can check -- and it is the reason this
+        // count is spelled out rather than derived from `tools.len()`, which
+        // would agree with itself however the surface was built.
+        assert_eq!(Arc::strong_count(&pool), 8);
     }
 
     /// The same shape `tools/fs` asserts, for the same reason: a tool that
@@ -254,6 +265,6 @@ mod tests {
         for tool in tools {
             registry.register(tool);
         }
-        assert_eq!(registry.names().len(), 5);
+        assert_eq!(registry.names().len(), 7);
     }
 }

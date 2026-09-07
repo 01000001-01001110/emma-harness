@@ -110,12 +110,15 @@ pub fn fold_records(records: &amp;[Value]) -&gt; Vec&lt;Message&gt; {
 
   <p>
     Every value in the output was written by the loop at the moment it appended
-    the same value to <code>query</code>. That is what makes the fold a replay
-    rather than a reconstruction, and the reason it matters is narrow and
-    expensive: this model family signs its thinking blocks, and a block
-    reassembled from its text is rejected on the <em>next</em> call. So the
-    <code>assistant</code> record stores the provider's own content array, and
-    the fold hands it back untouched.
+    the same value to <code>query</code>, so the fold is a replay rather than a
+    reconstruction.
+  </p>
+
+  <p>
+    Here is why that matters. This model family signs its thinking blocks, and a
+    block reassembled from its text is rejected on the <em>next</em> call. So
+    the <code>assistant</code> record stores the provider's own content array,
+    and the fold hands it back untouched.
   </p>
   <span class="src">crates/emma/src/session.rs — module doc; crates/emma/src/agent.rs — the <code>assistant</code> append</span>
 
@@ -156,12 +159,15 @@ struct Fold {
 
   <p>
     The removed collapse is documented here because it is the obvious
-    alternative. A finished goal used to become two lines of prose the instant it
-    finished, in the loop, and the fold carried its own copy of that rule so a
-    resume would produce the same shape. Two implementations of one decision,
-    and when either moved, <code>--resume</code>
-    rebuilds a conversation that was never sent, with nothing but a round-trip
-    test to say so. The two-line collapse survives, but only as what
+    alternative. A finished goal used to become two lines of prose the instant
+    it finished, in the loop, and the fold carried its own copy of that rule so
+    a resume would produce the same shape. Two implementations of one decision,
+    and when either moved, <code>--resume</code> rebuilt a conversation that was
+    never sent with nothing but a round-trip test to say so.
+  </p>
+
+  <p>
+    The two-line collapse survives only as what
     <a href="session-compaction.html">compaction</a> makes, later, and only when
     the size forces it.
   </p>
@@ -257,7 +263,7 @@ struct Fold {
     </figcaption>
   </figure>
 
-  <h2 id="arms">The arms, in the order a reader hits them</h2>
+  <h2 id="arms">The arms, in the order you hit them</h2>
 
   <pre><code><span class="c">// crates/emma/src/session.rs — Fold::record</span>
 match r["kind"].as_str().unwrap_or_default() {
@@ -384,9 +390,8 @@ match r["kind"].as_str().unwrap_or_default() {
       that abandoned the splice. A <code>messages</code> field that would not
       deserialise yielded an empty vector and the splice still removed
       <code>drop_messages</code> messages off the front, so a malformed record
-      deleted conversation rather than being ignored. That was the arm that deleted
-      conversation on malformed input while other arms dropped bad records and
-      no more. Both defaults are gone. A missing count and an unreadable
+      deleted conversation rather than being ignored, which no other arm did.
+      Both defaults are gone. A missing count and an unreadable
       replacement now each refuse the whole arm, say so on stderr, and leave
       the conversation alone. The refusal still names the consequence: the rebuilt conversation will not match
       the one that was sent.

@@ -211,17 +211,19 @@ pub fn none() -&gt; Self {
   <p>
     <code>read</code> is one line over <code>read_reporting</code>, and the
     split is the argument. The loss used to reach an <code>eprintln!</code> and
-    nowhere else, so the test named
-    <code>a_torn_tail_is_silent_and_damage_in_the_middle_is_not</code> asserted
-    only that the readable records came back, which is true whether or not the
-    damage was noticed: an adversarial reviewer removed the counting entirely
-    and the test stayed green across the whole crate. Printing is a presentation
-    choice; knowing is not, so the damage is returned as well.
+    nowhere else, so <code>a_torn_tail_is_silent_and_damage_in_the_middle_is_not</code>
+    asserted only that the readable records came back, which is true whether or
+    not the damage was noticed. An adversarial reviewer removed the counting
+    entirely and the test stayed green across the whole crate. Printing is a
+    presentation choice and knowing is not, so the damage comes back as a value.
+  </p>
+
+  <p>
     <code>torn_tail</code> is decided by <code>ends_with('\n')</code> rather
     than by the last line's position, because a truncated record can be valid
     JSON and only the trailing byte tells the two apart.
-    <span class="chip test">tested</span> That last rule was found by mutation,
-    in a pass that was not allowed to fix it.
+    <span class="chip test">tested</span> That rule was found by mutation, in a
+    pass that was not allowed to fix it.
   </p>
 
   <p>
@@ -237,7 +239,7 @@ pub fn none() -&gt; Self {
   </p>
 
   <p>
-    <code>lock()</code> is the fourth thing that changed with it: the
+    <code>lock()</code> changed with it too. The
     poisoned-lock recovery used to sit inside <code>append</code> and now has
     four callers, so it is one function. A panic on some other thread says
     nothing about whether this file is still writable, and what is inside the
@@ -426,32 +428,23 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>; crates/emma/src/agent.rs, delegate.rs, main.rs — every call site</span>
 
   <p>
-    <strong>A poisoned mutex is recovered instead of stopping the
-    transcript</strong> (before 2026-08-23 it was not). The lock is poisoned
-    when a thread panics while holding it, which does not imply the file is
-    unwritable. <code>append</code> returned early instead, discarding every
-    later record for the rest of the process.
+    A poisoned mutex is recovered rather than treated as a reason to stop the
+    transcript, and before 2026-08-23 it was not. <code>append</code> returned
+    early instead, discarding every later record for the rest of the process,
+    and on that path <code>write_failed</code> was never set, so
+    <code>transcript_failed</code> went on reporting a healthy transcript while
+    recording had stopped. The recovery is
+    <code>unwrap_or_else(|e| e.into_inner())</code>, matching twenty-five other
+    sites in the tree.
   </p>
 
   <p>
-    On that path <code>write_failed</code> was never set, so
-    <code>transcript_failed</code> kept reporting a healthy transcript while
-    recording had stopped. Recovery uses
-    <code>unwrap_or_else(|e| e.into_inner())</code>, matching twenty-five other
-    sites in the tree; the data behind this lock is a <code>File</code> handle
-    that another thread's panic cannot leave half-updated.
     <span class="chip test">tested</span>
     <code>a_poisoned_lock_does_not_silently_stop_the_transcript</code> poisons
     the lock for real, by joining a thread that panics while holding it, and
-    asserts the lock <em>is</em> poisoned before appending so the case cannot
-    pass without testing anything. Restoring the early return turns it red with
-    only the first record on disk.
-  </p>
-
-  <p>
-    The remaining early return is the one silence here that is correct:
-    <code>guard.as_mut()</code> is <code>None</code> for the no-log
-    constructor, and a run with no session directory has nothing to append to.
+    asserts the lock <em>is</em> poisoned before appending, so the case cannot
+    pass without testing anything. Restore the early return and it turns red
+    with only the first record on disk.
   </p>
 
   <div class="note">

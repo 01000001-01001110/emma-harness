@@ -82,11 +82,10 @@
 
   <p class="lede">
     There is no single configuration file and no merged view of one. Three
-    crates read from three scopes, and the reason a reader gets lost is that the
-    <em>project's</em> configuration and the <em>person's</em> are different
-    files, with different names, in different places, failing in different ways.
-    This page is the map: every file, who reads it, what it decides, and what
-    happens when it is wrong.
+    crates read from three scopes, and what gets you lost is that the
+    <em>project's</em> configuration and <em>yours</em> are different files, with
+    different names, in different places, failing in different ways. Below:
+    every file, who reads it, what it decides, and what happens when it is wrong.
   </p>
 
   <div class="key">
@@ -162,7 +161,7 @@
         <td><code>emma-harness</code></td>
         <td><code>permissions.deny</code> <em>only</em>: never
             <code>allow</code>, never <code>ask</code></td>
-        <td>skipped and reported; the run continues with no user-scope rules, and the operator is told that none of that file's <code>deny</code> rules are in force</td>
+        <td>skipped and reported. The run continues with no user-scope rules, and you are told that none of that file's <code>deny</code> rules are in force</td>
       </tr>
       <tr>
         <td><code>~/.emma/settings.json</code></td>
@@ -193,20 +192,19 @@
   <span class="src">crates/harness/src/lib.rs (<code>load_selecting</code>, <code>read_permissions</code>, <code>user_permissions</code>); crates/emma/src/settings.rs; crates/llm/src/auth.rs; crates/emma/src/term/theme.rs</span>
 
   <p>
-    Rows one to four belong to the project and rows five to seven belong to the
-    person, and nothing crosses. <code>settings.rs</code>'s module doc gives the
-    reason: the project's configuration is shared by
-    everyone who clones the repository, so a personal default written there
-    would be two files answering one question with no rule for disagreeing, and
-    the answer that won would be the repository's, on somebody else's screen.
-    There is no <code>theme</code> key in <code>config.json</code> and no
-    <code>personas</code> key in <code>~/.emma/settings.json</code>. Neither
-    key appears in the other file.
+    Rows one to four belong to the project and rows five to seven belong to you,
+    and nothing crosses. <code>settings.rs</code>'s module doc gives the reason.
+    The project's configuration is shared by everyone who clones the repository,
+    so a personal default written there would be two files answering one question
+    with no rule for disagreeing, and the answer that won would be the
+    repository's, on somebody else's screen. There is no <code>theme</code> key
+    in <code>config.json</code> and no <code>personas</code> key in
+    <code>~/.emma/settings.json</code>.
   </p>
 
   <p>
-    The one exception to "the project's files never touch the person's" runs the
-    other way and is narrow: <code>~/.claude/settings.json</code> contributes
+    The one exception to "the project's files never touch yours" runs the
+    other way and is narrow. <code>~/.claude/settings.json</code> contributes
     <code>deny</code> rules to the project's permission set. That is a
     restriction crossing a boundary, never a grant. It is
     <a href="config-claude.html#user">on the compatibility page</a>, because the
@@ -216,8 +214,8 @@
   <h2 id="boot">Four boot states, and they are closed</h2>
 
   <p>
-    The crate's module doc states them, and the phrasing matters because it is
-    the rule every refusal on the rest of this chapter is an instance of.
+    Every refusal in the rest of this chapter is an instance of the rule the
+    module doc states here.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · module doc</p>
@@ -246,7 +244,7 @@
 
   <p>
     The empty case is visible in <code>config check</code> as a hash and a byte
-    count, and it says so in words rather than leaving a reader to recognise the
+    count, and it says so in words rather than leaving you to recognise the
     SHA-256 of the empty string.
   </p>
 
@@ -261,9 +259,8 @@ config         fd13f35ed476c2f7</code></pre>
 
   <p>
     <code>load_selecting</code> is the whole of loading. It branches on the
-    flavour once, at the top, to get five values out of the spine file, and then
-    every later step is flavour-independent. Reading it is the fastest way to
-    see what order things happen in and which failures are fatal.
+    flavour once, at the top, to get five values out of the spine file, and every
+    later step is flavour-independent.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>Harness::load_selecting</code>, the flavour branch</p>
@@ -329,7 +326,7 @@ config         fd13f35ed476c2f7</code></pre>
     <a href="roadmap.html#hazards">named hazards</a> rather than described here.
   </p>
 
-  <h2 id="prompt">The prompt is concatenation, and that is a property</h2>
+  <h2 id="prompt">The prompt is plain concatenation</h2>
 
   <p>
     The standing instructions are assembled from a fixed list of files, in a
@@ -389,7 +386,7 @@ fn read_layer(path: &amp;Path) -&gt; Result&lt;Option&lt;String&gt;&gt; {
     taken from after the frontmatter with leading whitespace stripped, and a
     command body is trimmed at both ends. Neither is always-on prompt text.
     A skill body arrives only when the model loads it, and a command body is text
-    a person typed a <code>/name</code> to summon. Both are
+    you typed a <code>/name</code> to summon. Both are
     <a href="config-skills.html">on the skills page</a>.
   </p>
 
@@ -429,9 +426,8 @@ pub fn short(input: &amp;str) -&gt; String {
   <p>
     <code>config_hash</code> is taken over <code>raw</code>, the file's bytes,
     rather than over the parsed <code>Spine</code>. Reformatting the JSON changes
-    it and re-ordering two keys changes it, which is the behaviour a reader
-    wants from a line that answers "is this the same configuration file as
-    yesterday".
+    it and re-ordering two keys changes it, which is what you want from a line
+    that answers "is this the same configuration file as yesterday".
     <span class="chip cert">certified</span>: an empty <code>.emma/config.json</code>
     containing <code>{}</code> reports <code>config 44136fa355b3678a</code>,
     which is <code>sha256("{}")[..16]</code>; this repository's own
@@ -441,10 +437,9 @@ pub fn short(input: &amp;str) -&gt; String {
   <h2 id="value">What the loop is given</h2>
 
   <p>
-    Everything above ends in one struct, and the discipline the crate exists to
-    enforce is what is <em>not</em> on it. The loop never reads a file, never
-    learns which layer a sentence came from, and never branches on
-    configuration.
+    Everything above ends in one struct, and what matters is what is
+    <em>not</em> on it. The loop never reads a file, never learns which layer a
+    sentence came from, and never branches on configuration.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>Harness</code></p>
@@ -535,9 +530,9 @@ pub struct Harness {
 
   <p>
     The seven kinds above are what the loader reads. Two more stores exist in
-    the crate, each with its own format and its own failure modes, and a reader
-    who greps for either currently finds no page. They reach a run by different
-    routes, and one of them does not reach it at all.
+    the crate, each with its own format and its own failure modes, and neither
+    has a page of its own. They reach a run by different routes, and one of them
+    does not reach it at all.
   </p>
 
   <p>
@@ -575,16 +570,19 @@ pub struct Harness {
 
   <p>
     The file has two zones separated by a comment line. Everything above the
-    curated fence is derived and rewritten on every refresh; everything from the
-    fence down is written by a person and never touched. Two zones rather than
-    one merged document, because merging is how a sentence somebody wrote gets
-    lost, and because the derived half has to be allowed to be wrong and thrown
-    away. A file that has lost the fence is refused rather than rewritten, and
-    so is one that cannot be read at all: not valid UTF-8, a directory, no
-    permission. That second refusal is a change from the branch this came from,
-    where any read error fell through to the create path and overwrote the
-    curated zone with a fresh empty one, so a file saved as UTF-16 in Notepad
-    was one <code>emma init</code> away from losing its prose. The write is to a
+    curated fence is derived and rewritten on every refresh. Everything from the
+    fence down is what you wrote, and nothing touches it. Merging the two is how
+    a sentence you wrote gets lost, and the derived half has to be allowed to be
+    wrong and thrown away.
+  </p>
+
+  <p>
+    A file that has lost the fence is refused, never rewritten. So is one that
+    cannot be read at all: not valid UTF-8, a directory, no permission. That
+    second refusal is a change from the branch this came from, where any read
+    error fell through to the create path and overwrote the curated zone with a
+    fresh empty one. A file saved as UTF-16 in Notepad was one
+    <code>emma init</code> away from losing its prose. The write goes to a
     sibling temporary file followed by a rename, for the same reason.
     <span class="chip unv">unverified</span> The UTF-16 case is the module's
     account of the branch's behaviour and was not reproduced here. Saving a
@@ -597,34 +595,47 @@ pub struct Harness {
     <code>crates/emma/src/memory/mod.rs</code> is a per-repository wiki of
     distilled durable knowledge under <code>&lt;repo&gt;/.emma/memory/</code>,
     with <code>Wiki::global</code> opening the same layout under a home
-    directory for facts that outlive one project. The root is a parameter rather
-    than a global, so a test never touches the real one. One subtraction from
-    the fork it was ported from is a security fix rather than a preference: the
-    fork also wrote the verbatim body of every successful <code>WebFetch</code>
-    into <code>.emma/memory/raw/web/</code>, and verbatim remote text inside the
-    working tree is untrusted input sitting where a later read treats it as the
-    project's own notes. The fork guarded it with a secret strip its own comment
-    declares is not a boundary. A distilled page is written by whoever learned
-    the thing, which removes the surface instead of filtering it.
+    directory for facts that outlive one project. The root is a parameter, never
+    a global, so a test never touches the real one.
+  </p>
+
+  <p>
+    One thing was subtracted from the fork it was ported from, and it was a
+    security fix. The fork also wrote the verbatim body of every successful
+    <code>WebFetch</code> into <code>.emma/memory/raw/web/</code>. Verbatim
+    remote text inside the working tree is untrusted input sitting where a later
+    read treats it as the project's own notes. The fork guarded it with a secret
+    strip its own comment declares is not a boundary. A distilled page is written
+    by whoever learned the thing, which removes the surface instead of filtering
+    it.
   </p>
   <span class="src">crates/emma/src/memory/mod.rs — module doc, <code>Wiki::project</code>, <code>Wiki::global</code>, <code>SCHEMA</code></span>
 
   <p>
     Four properties decide how it fails. <code>index.md</code> is regenerated
     from <code>pages/</code> after every mutation, so it cannot drift from the
-    ground truth by construction rather than by discipline, and
-    <code>log.md</code> is append-only. A malformed page is reported rather than
-    dropped: <code>Wiki::list</code> returns the pages it could read together
-    with a <code>Malformed</code> for each one it could not, with the reason, and
-    <code>index.md</code> gets a section for them, because a parse failure in
-    this layer must never look like a memory the user never had. Nothing
-    deletes; <code>Wiki::archive</code> moves a file into <code>archive/</code>
-    whole, and <code>Wiki::create</code> numbers a colliding slug against
-    <code>pages/</code> and <code>archive/</code> together, so a new memory
-    cannot land on one archived years earlier. And everything written is
-    plaintext markdown inside the repository, unencrypted and committable, which
-    is why the built-in schema tells the model in as many words never to write a
-    secret into it.
+    ground truth, and <code>log.md</code> is append-only.
+  </p>
+
+  <p>
+    A malformed page is reported, never dropped. <code>Wiki::list</code> returns
+    the pages it could read together with a <code>Malformed</code> for each one
+    it could not, with the reason, and <code>index.md</code> gets a section for
+    them. A parse failure in this layer must never look like a memory you never
+    had.
+  </p>
+
+  <p>
+    Nothing deletes. <code>Wiki::archive</code> moves a file into
+    <code>archive/</code> whole, and <code>Wiki::create</code> numbers a
+    colliding slug against <code>pages/</code> and <code>archive/</code>
+    together, so a new memory cannot land on one archived years earlier.
+  </p>
+
+  <p>
+    And everything written is plaintext markdown inside the repository,
+    unencrypted and committable, which is why the built-in schema tells the model
+    in as many words never to write a secret into it.
     <span class="chip test">tested</span>: the store's own test file asserts the
     schema text contains <code>CONTRADICTION</code> and
     <code>Never write a secret</code>, and that a user's edited
@@ -636,21 +647,27 @@ pub struct Harness {
     Three private modules sit under it.
     <code>crates/emma/src/memory/page.rs</code> is one memory on disk: the
     frontmatter, the title, the body, and the slug a title turns into. Its
-    frontmatter reader is hand-written rather than handed to
-    <code>serde_yaml</code>, and that is a change from the fork, whose argument
-    was that the crate costs nothing. True of the workspace and false of this
-    crate, which does not depend on <code>serde_yaml</code>. What is left is a
-    parser for four keys whose writer is fifty lines away. Three rules answer
-    the hard key, <code>source:</code>, which holds URLs: a value is the rest of
-    its line with no comment stripping, because a <code>#</code> in a
-    frontmatter value is far more likely to be a URL fragment; the writer quotes
-    anything that is not plainly a word, so a round trip cannot lose a colon, a
-    leading dash or a trailing space; and <code>pinned</code> is
-    <code>true</code> or <code>false</code> and nothing else, so
-    <code>yes</code> reads as a malformed page, which is the answer
-    <code>serde_yaml</code> gives the harness's frontmatter one crate over. It
-    tolerates CRLF and a leading UTF-8 BOM, because a frontmatter parser in this
-    workspace once dropped 86 of 90 real files by matching
+    frontmatter reader is hand-written instead of handed to
+    <code>serde_yaml</code>, which is a change from the fork. The fork's argument
+    was that the crate costs nothing. True of the workspace, false of this crate,
+    which does not depend on <code>serde_yaml</code>. What is left is a parser
+    for four keys whose writer sits fifty lines away.
+  </p>
+
+  <p>
+    Three rules answer the hard key, <code>source:</code>, which holds URLs. A
+    value is the rest of its line with no comment stripping, because a
+    <code>#</code> in a frontmatter value is far more likely to be a URL
+    fragment. The writer quotes anything that is not plainly a word, so a round
+    trip cannot lose a colon, a leading dash or a trailing space. And
+    <code>pinned</code> is <code>true</code> or <code>false</code> and nothing
+    else, so <code>yes</code> reads as a malformed page, which is the answer
+    <code>serde_yaml</code> gives the harness's frontmatter one crate over.
+  </p>
+
+  <p>
+    It tolerates CRLF and a leading UTF-8 BOM, because a frontmatter parser in
+    this workspace once dropped 86 of 90 real files by matching
     <code>---\n</code> byte-exactly against fixtures written on LF.
   </p>
   <span class="src">crates/emma/src/memory/page.rs — module doc, <code>Front</code>, <code>render</code>, <code>Category</code></span>
@@ -662,6 +679,9 @@ pub struct Harness {
     category in a fixed order and prints every category even when empty, reading
     <code>_none yet_</code>, because a wiki that shows five headings and hides
     the sixth reads as if the sixth is not allowed.
+  </p>
+
+  <p>
     <code>crates/emma/src/memory/clock.rs</code> is eighty-two lines producing
     today's date as <code>YYYY-MM-DD</code> without a date crate: there is no
     <code>chrono</code>, <code>time</code> or <code>jiff</code> in the lock

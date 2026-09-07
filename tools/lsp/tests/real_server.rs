@@ -25,7 +25,8 @@ use std::time::Duration;
 use emma_tool_api::Tool;
 use emma_tools_lsp::client::Readiness;
 use emma_tools_lsp::{
-    server, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+    server, Completion, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+    SignatureHelp,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -599,3 +600,407 @@ async fn diagnostics_against_this_repository() {
 }
 
 // endregion: Diagnostics, against a server that really pushes them
+
+/// **Completion, against the real server, and this is the test the fixtures
+/// cannot replace.**
+///
+/// Every shape in `render`'s completion tests is one this author wrote down
+/// from the protocol. That is exactly the position this crate was in when it
+/// declared readiness at 0.36 seconds against every fake and was wrong against
+/// rust-analyzer. So this asks the real server for completions in the middle of
+/// a real file and asserts the three things a wrong answer would break:
+///
+/// 1. Something comes back at all, and it contains the fixture's own item.
+/// 2. What would be inserted is plain text, not a snippet with placeholders —
+///    which is what `snippetSupport: false` in the handshake is asking for, and
+///    the one claim in that block that changes bytes in somebody's file.
+/// 3. The filter text is a bare identifier, not the decorated label. This is
+///    the difference between a list that narrows as you type and one that
+///    empties.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_completes_and_the_items_are_insertable() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    // A file that asks for a method on a `Config`. The cursor sits directly
+    // after the dot, which is where a person's would be.
+    // **Appended to `lib.rs` rather than written as a new file, and that is
+    // the finding this test produced on its first run.** A fresh
+    // `src/probe.rs` is not in the crate's module tree until something
+    // declares `mod probe;`, and rust-analyzer offers nothing at all for a
+    // file it does not consider part of the build. It answered with zero
+    // items and no error, which is exactly the silence this crate's
+    // readiness design exists to tell apart from an empty answer.
+    let probe = format!(
+        "{LIB_RS}
+pub fn probe(c: Config) {{
+    c.
+}}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+    // The cursor sits directly after the dot, where a person's would be.
+    let line = probe
+        .lines()
+        .position(|l| l.trim() == "c.")
+        .expect("the probe line") as u32;
+
+    let answer = client
+        .request(
+            "textDocument/completion",
+            serde_json::json!({
+                "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) },
+                "position": { "line": line, "character": 6 },
+            }),
+        )
+        .await
+        .expect("the server answered");
+
+    let (items, _incomplete) = emma_tools_lsp::render::parse_completions(&answer.value);
+    eprintln!(
+        "real completion: {} items, first five: {:?}",
+        items.len(),
+        items
+            .iter()
+            .take(5)
+            .map(|i| (&i.label, &i.filter, &i.insert, i.kind, i.snippet))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !items.is_empty(),
+        "the real server offered no completions after a dot on a known type"
+    );
+
+    // The fixture's own field is reachable from here, and is the one item this
+    // test can name without depending on the standard library's shape.
+    let named = items
+        .iter()
+        .find(|i| i.filter == "name")
+        .unwrap_or_else(|| {
+            panic!(
+                "no `name` among {:?}",
+                items.iter().map(|i| &i.filter).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        named.kind, "field",
+        "a struct field came back as something else"
+    );
+
+    // Nothing offered may be a snippet: the handshake asked for plain text, and
+    // a placeholder inserted literally is `${1:value}` in somebody's source.
+    for item in &items {
+        assert!(
+            !item.snippet,
+            "the server sent a snippet despite snippetSupport: false — {item:?}"
+        );
+        assert!(
+            !item.insert.contains("${"),
+            "an item would insert a placeholder verbatim: {item:?}"
+        );
+    }
+
+    // And the filter is an identifier rather than the decorated label, which is
+    // what makes typing narrow the list. rust-analyzer labels methods `name()`
+    // and similar; the filter must not carry the brackets.
+    for item in items.iter().filter(|i| i.kind == "method") {
+        assert!(
+            !item.filter.contains('('),
+            "a method's filter text carries its brackets, so typing will not \
+             match it: {item:?}"
+        );
+    }
+}
+
+/// Signature help, against the real server, with the cursor inside a call.
+///
+/// The claim under test is the one the protocol changed its mind about: which
+/// parameter is marked active. A client reading only the top-level field marks
+/// the wrong argument as soon as the cursor moves past the first comma.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_marks_the_argument_the_cursor_is_in() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    // Two parameters, so "which one is active" has a wrong answer available.
+    //
+    // **Appended to `lib.rs`, and that is the whole point of this paragraph.**
+    // Until 2026-09-06 this wrote `src/sig.rs`, which `LIB_RS` never declares
+    // with a `pub mod`, so rust-analyzer considered it no part of the crate and
+    // offered nothing — and the test took an `else { eprintln!(); return; }` and
+    // reported green having asserted nothing at all. That is the identical
+    // defect the completion probe above records, in the same file, found the
+    // same way. Certified 2026-09-06 against rust-analyzer 1.94.1: appending to
+    // `lib.rs` makes the server answer, and the escape hatch below is now
+    // unreachable on a machine with a working server.
+    let probe = format!(
+        "{LIB_RS}
+pub fn take(a: u8, b: u8) -> u8 {{ a + b }}
+pub fn sig_probe() -> u8 {{
+    take(1, 2)
+}}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+    let line = probe
+        .lines()
+        .position(|l| l.trim() == "take(1, 2)")
+        .expect("the probe line") as u32;
+
+    // Character 12 is `    take(1, 2)` counted to just before the `2`: inside
+    // the call and past the comma, so the second argument is the active one.
+    let answer = client
+        .request(
+            "textDocument/signatureHelp",
+            serde_json::json!({
+                "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) },
+                "position": { "line": line, "character": 12 },
+            }),
+        )
+        .await
+        .expect("the server answered");
+
+    let Some((sigs, active)) = emma_tools_lsp::render::parse_signatures(&answer.value) else {
+        // **Not an escape any more, and the difference is the point.** A server
+        // that offers no signature help inside a call in a file it has indexed
+        // is a finding, not a fact about the machine — the machine question was
+        // already answered by `fixture()` returning `Some`. Silence here used to
+        // be a green pass.
+        panic!(
+            "the real server offered no signature help inside a call on line {line}; \
+             raw answer: {}",
+            answer.value
+        );
+    };
+    eprintln!(
+        "real signature help: active={active} {:?}",
+        sigs.iter()
+            .map(|s| (&s.label, &s.parameters, s.active_parameter))
+            .collect::<Vec<_>>()
+    );
+    let sig = &sigs[active];
+    assert!(
+        sig.label.contains("take"),
+        "the signature is not the function being called: {sig:?}"
+    );
+    assert_eq!(
+        sig.active_parameter,
+        Some(1),
+        "the cursor is past the comma, so the second argument is active: {sig:?}"
+    );
+}
+
+/// **The two point tools as tools, against the real server** — the argument
+/// shape, the containment, the sync and the rendering, in the path the model
+/// actually calls.
+///
+/// The tests above drive `client.request` directly, which certifies the wire
+/// and skips everything this crate does around it. What is only checked here is
+/// `prepare_after`: it finds `after` in the file on disk, puts the cursor at its
+/// **end** in UTF-16 units, and hands that to a server that will happily answer
+/// a question about any other column. `tests/tools.rs` proves the number sent is
+/// the one intended; only a real server can say that the number is the one that
+/// produces the right answer.
+///
+/// Both probes are appended to `lib.rs` for the reason the two tests above
+/// record: rust-analyzer offers nothing at all for a file the crate's module
+/// tree does not declare.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_point_tools_answer_for_real() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    let probe = format!(
+        "{LIB_RS}
+pub fn take(a: u8, b: u8) -> u8 {{ a + b }}
+
+pub fn point_probe(c: Config) -> u8 {{
+    c.name;
+    take(1, 2)
+}}
+"
+    );
+    sandbox.write("src/lib.rs", &probe);
+    // 1-based, as the tools take them.
+    let line_of = |needle: &str| {
+        probe
+            .lines()
+            .position(|l| l.trim() == needle)
+            .unwrap_or_else(|| panic!("no {needle:?} line in the probe")) as u64
+            + 1
+    };
+
+    // `after: "c."` puts the cursor one unit past the dot. Asked at the *start*
+    // of the match instead, rust-analyzer answers with every name in scope —
+    // a full, well-ordered, confident list of the wrong completions.
+    let out = Completion::new(pool.clone())
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/lib.rs", "line": line_of("c.name;"), "after": "c." }),
+        )
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!("--- Completion ---\n{}", out.content);
+    assert!(
+        !out.content.contains("No completions found"),
+        "the real server offered nothing after a dot on a known type: {}",
+        out.content
+    );
+    // The fixture's own field, which is the one item this can name without
+    // depending on the standard library's shape. `field:` and not some other
+    // kind: a cursor at the start of `c.` would return locals and functions.
+    assert!(
+        out.content.contains("field: name"),
+        "the member list is not the one for a `Config`, which is what a cursor \
+         at the wrong column produces: {}",
+        out.content
+    );
+
+    // `after: "take(1, "` puts the cursor where the second argument is typed.
+    let out = SignatureHelp::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/lib.rs", "line": line_of("take(1, 2)"), "after": "take(1, " }),
+        )
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!("--- SignatureHelp ---\n{}", out.content);
+    assert!(
+        out.content.contains("> fn take(a: u8, b: u8) -> u8"),
+        "the active signature is not the function being called: {}",
+        out.content
+    );
+    assert!(
+        out.content.contains("argument 2: b: u8"),
+        "the cursor is past the comma, so the second argument is the one being \
+         typed — a cursor at the start of `take(1, ` would say the first: {}",
+        out.content
+    );
+}
+
+/// **What the real server says it can do, which the handshake used to throw
+/// away.** The trigger characters are the whole reason to read the reply: they
+/// are what makes a list open by itself, and a client that hard-codes its own
+/// guess is wrong for every language whose server disagrees. Printed as well as
+/// asserted, because the exact set is a fact about a version of rust-analyzer
+/// and the next reader should see it rather than trust this sentence.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_real_server_names_the_characters_that_should_open_a_list() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    let caps = client.capabilities();
+    eprintln!("real capabilities: {caps:?}");
+
+    assert!(
+        caps.completion,
+        "the server did not offer completion at all: {caps:?}"
+    );
+    assert!(
+        caps.completion_triggers.iter().any(|t| t == "."),
+        "a dot must open a completion list, or nothing feels like an editor: {caps:?}"
+    );
+    assert!(
+        caps.signature_help,
+        "the server did not offer signature help: {caps:?}"
+    );
+    assert!(
+        caps.signature_triggers.iter().any(|t| t == "("),
+        "an open bracket must open signature help: {caps:?}"
+    );
+}
+
+/// **Syntax colour, from the server that type-checked the file.** The claim
+/// under test is the one a regular-expression highlighter gets wrong: a `//`
+/// inside a string is not a comment, and only something that has parsed the
+/// file can tell the difference.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_names_a_comment_and_not_the_slashes_in_a_string() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    let legend = client.capabilities().semantic_tokens;
+    eprintln!("real legend: {} types", legend.types.len());
+    assert!(
+        !legend.is_empty(),
+        "the server named no token types, so nothing can be coloured"
+    );
+
+    // A real comment, and a string containing what looks like one.
+    let probe = format!(
+        "{LIB_RS}
+// a real comment
+pub fn url() -> &'static str {{ \"https://x\" }}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+
+    let answer = client
+        .request(
+            "textDocument/semanticTokens/full",
+            serde_json::json!({ "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) } }),
+        )
+        .await
+        .expect("the server answered");
+    let tokens = emma_tools_lsp::render::parse_tokens(&answer.value, &legend, &probe);
+    assert!(!tokens.is_empty(), "the server returned no tokens");
+
+    let lines: Vec<&str> = probe.lines().collect();
+    let text_of = |t: &emma_tools_lsp::render::Token| -> String {
+        lines[t.line]
+            .chars()
+            .skip(t.start)
+            .take(t.end - t.start)
+            .collect()
+    };
+    let comments: Vec<String> = tokens
+        .iter()
+        .filter(|t| t.kind == emma_tools_lsp::render::TokenKind::Comment)
+        .map(text_of)
+        .collect();
+    eprintln!("real comments: {comments:?}");
+    assert!(
+        comments.iter().any(|c| c.contains("a real comment")),
+        "the real comment was not named: {comments:?}"
+    );
+    assert!(
+        !comments.iter().any(|c| c.contains("https")),
+        "a string's slashes were called a comment: {comments:?}"
+    );
+}

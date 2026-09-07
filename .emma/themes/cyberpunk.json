@@ -1,0 +1,23 @@
+{
+  "name": "cyberpunk",
+  "about": "For a dark terminal, measured against #0d0221 — a violet-black, not a neutral one. Neon on a night city: every accent is a light source rather than a pigment, and the six source roles are spread right around the wheel so a screen of code reads as signage.",
+  "roles": {
+    "dim":      { "hex": "#8c7bb8", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#00f0a0", "ansi16": "light_green" },
+    "err":      { "hex": "#ff2e63", "ansi16": "light_red" },
+    "warn":     { "hex": "#ffd400", "ansi16": "light_yellow" },
+    "info":     { "hex": "#22d3ee", "ansi16": "light_cyan" },
+    "accent":   { "hex": "#ff4fd8", "ansi16": "light_magenta" },
+    "ground":   { "hex": "#0d0221", "ansi16": "black" },
+    "comment":  { "hex": "#6d5f9c", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#ff5fa2", "ansi16": "magenta" },
+    "string":   { "hex": "#a6ff4d", "ansi16": "green" },
+    "number":   { "hex": "#ffab3d", "ansi16": "yellow" },
+    "type":     { "hex": "#45e6ff", "ansi16": "cyan" },
+    "function": { "hex": "#a98cff", "ansi16": "light_blue" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#1d0b3a" }
+  }
+}

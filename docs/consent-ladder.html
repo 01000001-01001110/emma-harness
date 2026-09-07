@@ -460,9 +460,8 @@
     denial has mutation receipts for <code>read_only</code> and
     <code>EXEMPT</code>, but the <code>allow</code>-rule arm still has no test
     under <code>Gate::Unattended</code>.
-    <em>What would settle it:</em> add
-    <code>an_allow_rule_answers_even_when_unattended</code> beside the approval
-    tests, build <code>Approvals</code> with <code>Gate::Unattended</code>, an
+    <em>What would settle it:</em> add a test beside the approval tests that
+    builds <code>Approvals</code> with <code>Gate::Unattended</code>, an
     empty answer queue and an allow rule for a writing tool, and assert
     <code>Allow</code>. Then move the unattended denial above the allow arm,
     require that test to fail, restore the source and require it to pass.
@@ -608,10 +607,10 @@ match self
     <li>
       <span class="chip unv">unverified</span> The <code>allow</code>-under-<code>-p</code>
       mode has no test, as above. It also has no documentation outside this page.
-      The exact unit-level settlement is the
-      <code>an_allow_rule_answers_even_when_unattended</code> test described
+      The unit-level settlement is the unattended allow-rule test sketched
       above; the process-level settlement is the paired invocation immediately
-      before this item.
+      before this item. Neither name is given as a citation, because neither
+      test exists yet.
     </li>
     <li>
       <span class="chip cert">certified</span> <code>cargo test -p emma --lib</code>

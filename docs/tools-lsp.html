@@ -86,12 +86,12 @@
 <p class="lede">
   <code>Grep</code> finds a name. It cannot tell a call from a comment, does not
   know that <code>Config</code> here is the type declared over there, and cannot
-  answer what breaks if a signature changes. These five tools ask a language
+  answer what breaks if a signature changes. These seven tools ask a language
   server's own understanding instead, and the whole crate is arranged around one
   rule: an empty answer is only an answer when the index was complete.
 </p>
 
-<h2 id="tools">The five tools</h2>
+<h2 id="tools">The seven tools, and the two argument shapes</h2>
 
 <div class="tw">
   <table>
@@ -102,23 +102,85 @@
       <tr><td><code>Hover</code></td><td>the position schema</td></tr>
       <tr><td><code>DocumentSymbols</code></td><td><code>file_path</code> only</td></tr>
       <tr><td><code>Diagnostics</code></td><td><code>file_path</code> only</td></tr>
+      <tr><td><code>Completion</code></td><td>the cursor schema</td></tr>
+      <tr><td><code>SignatureHelp</code></td><td>the cursor schema</td></tr>
     </tbody>
   </table>
 </div>
 
 <p>
-  All five declare the same <code>const READ_ONLY: ToolMeta</code>:
+  All seven share one <code>const READ_ONLY: ToolMeta</code> through the
+  <code>lsp_tool!</code> shell —
   <code>read_only: true</code>, <code>reaches_network: false</code>,
-  <code>idempotent: true</code>. None of them prompts.
+  <code>idempotent: true</code> — and none of them prompts. The shell also owns
+  <code>name</code>, <code>meta</code> and <code>invoke</code>, so a fix to the
+  observation-not-abort ruling or to the meta flags is applied once. What stays
+  hand-written per tool is the schema, the cheap validation, and
+  <code>run</code>.
 </p>
 
+<p>
+  <strong><code>Completion</code> and <code>SignatureHelp</code> landed on
+  2026-09-06 and they do not take a <code>symbol</code>.</strong> The three
+  older position tools ask about a symbol; these two ask about a
+  <em>point</em>, and a point often has no symbol on it. <code>config.</code>
+  is not an identifier and the line does not compile yet, so naming a symbol
+  would be the wrong question. Their schema takes <code>after</code> instead:
+  the text immediately before the place being asked about, with the cursor put
+  at its end. The same substring search backs both shapes, so the same
+  occurrence refusals apply, plus one of its own. An empty <code>after</code> is
+  refused, because an empty string matches at column 0 of every line and would
+  produce a confident answer about the start of the line rather than about the
+  point the caller meant.
+</p>
+
+<!-- quote:cursor-schema -->
+<pre><code><span class="c">/// The one sentence every schema here says about `file_path`.</span>
+<span class="c">///</span>
+<span class="c">/// All seven tools take the same argument and it means the same thing in each,</span>
+<span class="c">/// so it is written once: four copies of a sentence the model learns the tool</span>
+<span class="c">/// surface from is four chances for one of them to say something else.</span>
+<span class="k">const</span> FILE_PATH_DESCRIPTION: &amp;<span class="k">str</span> =
+    <span class="s">"A source file inside the working directory. Emma picks the language server from the \
+     extension."</span>;
+
+<span class="c">// …</span>
+
+<span class="k">fn</span> cursor_schema(after: &amp;<span class="k">str</span>) -&gt; Value {
+    json!({
+        <span class="s">"type"</span>: <span class="s">"object"</span>,
+        <span class="s">"properties"</span>: {
+            <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: FILE_PATH_DESCRIPTION },
+            <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the point is on."</span> },
+            <span class="s">"after"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: after },
+            <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the text appears more than once."</span> }
+        },
+        <span class="s">"required"</span>: [<span class="s">"file_path"</span>, <span class="s">"line"</span>, <span class="s">"after"</span>],
+        <span class="s">"additionalProperties"</span>: <span class="k">false</span>,
+    })
+}</code></pre>
+<!-- /quote -->
+
+<p>
+  Each of the two writes its own <code>after</code> description, which is why
+  the function takes one: what counts as the text before the point differs
+  between completing a member and asking which argument you are in. Both
+  descriptions live in <code>tools/lsp/src/descriptions/</code> beside the other
+  five, as <code>completion.md</code> and <code>signature_help.md</code>. The
+  <code>file_path</code> sentence is one constant rather than seven copies,
+  for the same reason the shell is one macro: a drifted description would teach
+  the model something different about one tool.
+</p>
+
+<!-- quote:position-schema -->
 <pre><code><span class="k">fn</span> position_schema(extra: Option&lt;(&amp;<span class="k">str</span>, Value)&gt;) -&gt; Value {
-    <span class="k">let mut</span> properties = json!({
-        <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"A Rust file inside the working directory."</span> },
+    <span class="k">let</span> <span class="k">mut</span> properties = json!({
+        <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: FILE_PATH_DESCRIPTION },
         <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the symbol appears on."</span> },
         <span class="s">"symbol"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once."</span> },
         <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the name appears more than once."</span> }
     });</code></pre>
+<!-- /quote -->
 
 <p>
   A name rather than a column, because asking a model for a column offset gets a
@@ -127,14 +189,14 @@
   which is the workflow: grep to find candidate lines, then ask the compiler
   which of them is real.
 </p>
-<span class="src">tools/lsp/src/tools.rs — <code>position_schema</code>, <code>READ_ONLY</code></span>
+<span class="src">tools/lsp/src/tools.rs — <code>lsp_tool!</code>, <code>FILE_PATH_DESCRIPTION</code>, <code>position_schema</code>, <code>READ_ONLY</code></span>
 
 <h3>What every call does before asking</h3>
 
 <p>
-  <code>prepare</code> is five steps in a fixed order: contain the path, refuse
-  anything that is not <code>.rs</code>, read the file, get a client for the
-  root, and push the current bytes to the server. Containment comes first,
+  The preamble is five steps in a fixed order: contain the path, find the
+  language for the extension and refuse when there is none, read the file, get a
+  client for the root, and push the current bytes to the server. Containment comes first,
   before the file is read and before a process is started, because a path
   outside the root must not so much as cause a spawn.
 </p>
@@ -307,17 +369,20 @@
   probing a shell means running something; <code>--version</code> runs nothing.
 </p>
 
+<!-- quote:rustup-proxy -->
 <pre><code><span class="c">//! ```text</span>
 <span class="c">//! $ rust-analyzer --version</span>
-<span class="c">//! error: Unknown binary 'rust-analyzer.exe' in official toolchain '…'</span>
+<span class="c">//! error: Unknown binary 'rust-analyzer.exe' in official toolchain</span>
+<span class="c">//! '1.94.1-x86_64-pc-windows-msvc'.</span>
 <span class="c">//! ```</span>
 <span class="c">//!</span>
 <span class="c">//! `~/.cargo/bin/rust-analyzer` exists as a rustup proxy whether or not the</span>
 <span class="c">//! component behind it is installed. It is first on `PATH`, it is a real file,</span>
-<span class="c">//! and it exits **0** while printing that to stderr — so a chosen-by-existence</span>
-<span class="c">//! search picks a binary that will never speak LSP, and the failure surfaces</span>
-<span class="c">//! much later as a handshake that times out. Measured on this machine on</span>
-<span class="c">//! 2026-08-11, which is why the search costs one process spawn.</span></code></pre>
+<span class="c">//! and a chosen-by-existence search picks a binary that will never speak LSP,</span>
+<span class="c">//! so the failure surfaces much later as a handshake that times out. Which</span>
+<span class="c">//! candidates are probed, and for what, is [`crate::lang::Identity`], and the</span>
+<span class="c">//! reason a bundled `server.js` is *not* probed is recorded there.</span></code></pre>
+<!-- /quote -->
 
 <p>
   The probe requires <em>stdout</em> to start with <code>rust-analyzer</code>,
@@ -329,6 +394,128 @@
   line of every result and a wrong answer is attributable to a particular build.
 </p>
 <span class="src">tools/lsp/src/server.rs — module doc, <code>probe</code>, <code>PROBE_TIMEOUT</code></span>
+
+<h2 id="declared">An eighth language, without a recompile</h2>
+
+<p>
+  Until 2026-09-07 the seven above were the whole list, and an eighth meant
+  editing <code>lang.rs</code> and rebuilding. A <code>servers</code> map inside
+  the existing <code>lsp</code> block of
+  <a href="config-personal.html">the personal settings file</a> now declares one:
+</p>
+
+<pre><code>{ "lsp": {
+    "enabled": ["rust", "go"],
+    "servers": {
+      "go": { "extensions": ["go"], "command": "gopls",
+              "language_id": "go", "args": [], "init_options": {} }
+    } } }</code></pre>
+
+<p>
+  <strong>Everything a declaration produces is the same
+  <code>Language</code> the built-in table holds</strong>, which is the design
+  decision the rest of this page depends on: discovery, the pool key, the
+  readiness rules, the seven tools and every refusal already work against that
+  type and none of them gained a branch for a declared entry. The alternative
+  &mdash; a parallel path for user servers &mdash; is how the two halves come to
+  disagree about containment.
+</p>
+
+<p>
+  <strong>Extend by default, override by key.</strong> A key naming one of the
+  seven replaces that entry <em>entirely</em>; there is no field-wise merge, for
+  the reason <code>crates/harness</code> refuses one &mdash; a half-overridden
+  entry is a shape neither the writer nor the reader has ever seen. A key naming
+  nothing is appended <em>after</em> the seven, so first-match-wins in
+  <code>for_path</code> cannot let a declaration quietly take <code>.rs</code>
+  away from rust-analyzer.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_key_that_names_a_built_in_replaces_it_in_place_and_entirely</code> and
+  <code>a_declared_server_becomes_a_language_after_the_built_in_seven</code>.
+</p>
+
+<p>
+  <strong><code>command</code> is one program name or one absolute path, never a
+  command line</strong>, and <code>args</code> is a separate array. That is
+  <code>usertools.rs</code>'s existing ruling, applied here because the argument
+  did not change: splitting a string on spaces is the first half of running text
+  through a shell, and a path with a space in it is not an argument boundary.
+</p>
+
+<p>
+  <strong>An unknown field is refused rather than ignored</strong>, and the
+  refusal lists the fields that exist. <code>"arguments"</code> for
+  <code>"args"</code> would otherwise start a server with none of the arguments
+  it needs, and nothing anywhere would say so &mdash; the silent-wrong-answer
+  shape this whole crate is arranged against. A refusal is never fatal: the
+  other declarations and all seven built-ins still work, which is
+  <code>Pool::unknown_keys</code>' rule about an unknown key.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_field_emma_does_not_know_is_refused_rather_than_ignored</code> and
+  <code>a_refused_entry_does_not_take_the_others_with_it</code>.
+</p>
+
+<p>
+  <strong>A declared server is <code>network: true</code> and is never in the
+  default enabled set.</strong> Emma cannot assert <code>reaches_network:
+  false</code> about a program it did not choose, and these seven tools declare
+  that bit <em>statically</em> &mdash; the declaration was made before the entry
+  existed. So turning one on is a second, explicit act: the key has to appear in
+  <code>enabled</code> as well. That is the same two-step the three network
+  languages already have.
+</p>
+
+<p>
+  <strong>The caveat travels with every answer</strong>, the way the built-in
+  caveats do, and it says what Emma does not know rather than what it hopes.
+  Certified against a real server on 2026-09-07 by declaring rust-analyzer under
+  a new key and a new extension &mdash; a genuine end-to-end receipt rather than
+  a fixture, because rust-analyzer is the only real server on either box:
+</p>
+
+<pre><code>server: version not probed (Rustish) at ...\rust-analyzer.exe
+        (found via the command in settings.json)
+Rustish is declared in your settings.json. Emma did not choose this server,
+has never driven it to an answer, and cannot promise it stays off the network
+&mdash; these tools declare `reaches_network: false` and that bit was decided
+before this entry existed. Treat a first answer from it as unproven.
+struct: Declared  (line 1)
+  field: name  String  (line 2)
+fn: describe  fn(d: &amp;Declared) -&gt; String  (line 5)</code></pre>
+
+<p>
+  <span class="chip cert">certified</span> &mdash;
+  <code>cargo test -p emma-tools-lsp --test user_servers
+  a_declared_server_answers_about_its_own_extension_for_real -- --nocapture</code>,
+  which declares a <code>.rsx</code> language pointing at rust-analyzer and
+  asserts <code>DocumentSymbols</code> comes back about a file that no built-in
+  entry claims. Note "version not probed": an entry naming its own command skips
+  the identity probe, because the person has named a specific file for a specific
+  language and re-litigating that would make the feature useless for exactly the
+  servers it exists to reach.
+</p>
+
+<p>
+  <strong>Every run prints what it may spawn.</strong> A <code>read_only</code>
+  tool that prompts nobody will now start a program named in a configuration
+  file, so the startup line names each declared server and the command it
+  resolved to. And it is <em>this file only</em> &mdash; there is deliberately no
+  project-scoped layer, so a cloned repository cannot declare a program for Emma
+  to run.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> No third-party server has been driven
+  by this. The certification above is rust-analyzer wearing a different key, so
+  it proves the plumbing and proves nothing about <code>gopls</code>,
+  <code>zls</code> or <code>clangd</code> &mdash; whose trigger characters,
+  initialization options and readiness signals all differ. It also inherits the
+  crate's standing gap: <code>experimental/serverStatusNotification</code> is
+  rust-analyzer's, so a declared server will normally sit in
+  <code>Readiness::Unknown</code>, and that caveat is the honest one rather than
+  a degraded one. Settled by installing one and asking it something.
+</p>
+<span class="src">tools/lsp/src/lang.rs &mdash; <code>plan_user_servers</code>, <code>install_user_servers</code>, <code>Plan</code>, <code>SERVER_FIELDS</code>, <code>table</code>; tools/lsp/tests/user_servers.rs</span>
 
 <h2 id="readiness">Readiness, and the 0.36-second lie</h2>
 
@@ -532,6 +719,29 @@
 </p>
 <span class="src">tools/lsp/src/render.rs — <code>parse_locations</code>, <code>hover_text</code>, <code>symbols</code></span>
 
+<p>
+  Three more parsers joined them for the two new tools and for the Code
+  page&rsquo;s colour. <code>parse_completions</code> returns the items and the
+  <code>isIncomplete</code> flag together, because a truncated list and a
+  complete one are different facts and a caller that cannot tell them apart
+  stops asking. <code>parse_signatures</code> returns the signatures and which
+  one is active, each carrying its parameters and its active index.
+  <code>parse_tokens</code> decodes
+  <code>textDocument/semanticTokens/full</code>: five integers per token, a
+  character delta that restarts at the beginning of every line, and UTF-16
+  columns converted to characters through the one converter this crate has for
+  that. A trailing partial tuple stops the decode and keeps what was already
+  read; a token on a line the buffer no longer has is dropped, because colouring
+  by a stale position ends up half a line out.
+</p>
+
+<p>
+  Two renderers came with them, <code>completions</code> and
+  <code>signatures</code>, which are what the model reads.
+  <code>MAX_COMPLETIONS</code> is 40.
+</p>
+<span class="src">tools/lsp/src/render.rs — <code>parse_completions</code>, <code>parse_signatures</code>, <code>parse_tokens</code>, <code>completions</code>, <code>signatures</code>, <code>Legend</code>, <code>TokenKind</code>, <code>MAX_COMPLETIONS</code></span>
+
 <h3>Every location carries its source line</h3>
 
 <p>
@@ -596,12 +806,39 @@
 
 <h2 id="readonly">What makes <code>read_only</code> and <code>reaches_network</code> true</h2>
 
-<pre><code><span class="k">pub const</span> INIT_OPTIONS: &amp;<span class="k">str</span> = <span class="s">r#"{
+<!-- quote:init-options -->
+<pre><code><span class="c">/// What rust-analyzer is told at `initialize`, and the reason `read_only: true`</span>
+<span class="c">/// is not a lie.</span>
+<span class="c">///</span>
+<span class="c">/// Three switches are off, and each of them is off because leaving it on would</span>
+<span class="c">/// make an *analysis* tool run the analysed project's code or write into its</span>
+<span class="c">/// build directory:</span>
+<span class="c">///</span>
+<span class="c">/// - `check.enable`: rust-analyzer's default behaviour runs `cargo check` on</span>
+<span class="c">///   save. That is a compiler writing megabytes into `target/`, started by a</span>
+<span class="c">///   tool the approval gate lets through without asking anybody.</span>
+<span class="c">/// - `cargo.buildScripts.enable`: `build.rs` is arbitrary code from the</span>
+<span class="c">///   repository under analysis. Emma will read a stranger's repository; it will</span>
+<span class="c">///   not execute its build scripts to answer "where is this used".</span>
+<span class="c">/// - `procMacro.enable`: proc macro expansion loads compiled macro libraries,</span>
+<span class="c">///   which only exist because build scripts and a build produced them.</span>
+<span class="c">///</span>
+<span class="c">/// `cargo.extraArgs: ["--offline"]` is the fourth, and it is what makes</span>
+<span class="c">/// `reaches_network: false` true by construction rather than by hope.</span>
+<span class="c">///</span>
+<span class="c">/// **The cost, stated because the tools state it to the model too.** Without</span>
+<span class="c">/// proc macros, items generated by `derive` and by attribute macros are not in</span>
+<span class="c">/// the index, and references *into* macro-generated code will be missed. That</span>
+<span class="c">/// is a real hole in exactly the direction this crate is most dangerous — a</span>
+<span class="c">/// confidently short answer — which is why it is also rust's [`Language::caveat`]</span>
+<span class="c">/// and reaches the model on every result.</span>
+<span class="k">pub</span> <span class="k">const</span> RUST_INIT: &amp;<span class="k">str</span> = <span class="s">r#"{
   "check": { "enable": false },
   "checkOnSave": false,
   "cargo": { "buildScripts": { "enable": false }, "extraArgs": ["--offline"] },
   "procMacro": { "enable": false }
 }"#</span>;</code></pre>
+<!-- /quote -->
 
 <p>
   Checking, build scripts and proc macros are the three ways rust-analyzer
@@ -619,7 +856,7 @@
   a confidently short answer, which is why it is in the tool descriptions and
   not only in the source.
 </p>
-<span class="src">tools/lsp/src/client.rs — <code>INIT_OPTIONS</code></span>
+<span class="src">tools/lsp/src/lang.rs — <code>RUST_INIT</code>; tools/lsp/src/client.rs — <code>INIT_OPTIONS</code>, which is now that constant under its old name</span>
 
 <h2 id="cut">What was cut</h2>
 
@@ -700,12 +937,97 @@
 </p>
 <span class="src">tools/lsp/src/lib.rs — module doc</span>
 
+<h2 id="handshake">The handshake reply, which used to be thrown away</h2>
+
+<p>
+  <strong>Until 2026-09-06 the reply was discarded.</strong>
+  The <code>initialize</code> reply is where a server says what it can do, and
+  this client sent the request, waited for the answer, and dropped it. That was
+  survivable while every caller was a model asking one question at a time. It
+  stopped being survivable the moment a list had to open by itself.
+</p>
+
+<p>
+  <code>Capabilities::parse</code> now reads six things off the reply and
+  nothing else, because a struct that mirrored the whole schema would be a
+  second copy of the protocol to keep true:
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Field</th><th>Read from</th><th>What it decides</th></tr></thead>
+    <tbody>
+      <tr><td><code>completion_triggers</code></td><td><code>completionProvider.triggerCharacters</code></td><td>which characters open a list with nothing typed</td></tr>
+      <tr><td><code>completion</code></td><td>whether <code>completionProvider</code> is present</td><td>whether to ask at all</td></tr>
+      <tr><td><code>signature_triggers</code></td><td><code>signatureHelpProvider.triggerCharacters</code></td><td>usually <code>(</code> and <code>,</code></td></tr>
+      <tr><td><code>signature_help</code></td><td>whether <code>signatureHelpProvider</code> is present</td><td>whether to ask at all</td></tr>
+      <tr><td><code>resolve_completion</code></td><td><code>completionProvider.resolveProvider</code></td><td>whether <code>completionItem/resolve</code> would fill in documentation the first answer left out</td></tr>
+      <tr><td><code>semantic_tokens</code></td><td><code>semanticTokensProvider.legend.tokenTypes</code></td><td>what the token type numbers mean</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Everything absent is <code>false</code> or empty rather than assumed: a server
+  that does not say it completes is one this client will not ask. Nothing here
+  refuses to start over a missing capability, which would trade a working tool
+  for a strict one.
+</p>
+
+<p>
+  <strong>Two of these cannot be hard-coded, and that is the whole argument for
+  reading the reply.</strong> The trigger characters are one: rust-analyzer names
+  <code>.</code> and <code>:</code>, another language&rsquo;s server names
+  something else, and a client that guesses completes where somebody assumed
+  rather than where the language says it should. The legend is the other, and it
+  fails more quietly. The wire sends token <em>numbers</em>, and type 3 is
+  whatever this server put third in its own list, so a hard-coded legend colours
+  Rust correctly and Python wrongly with nothing on screen to say so. An empty
+  legend therefore means no colour at all rather than colour by a guessed order.
+</p>
+
+<p>
+  What Emma declares in the other direction changes what comes back, which is
+  why the client capability block is a behaviour rather than a formality.
+  <code>snippetSupport: false</code> is the line that matters: with it true,
+  rust-analyzer sends <code>push(${1:value})</code>, and a client that cannot
+  expand a placeholder writes those braces into somebody&rsquo;s source. Emma
+  carries the snippet flag through anyway so a consumer can refuse one.
+  <code>insertReplaceSupport</code> is true because the two ranges answer
+  different questions and Emma uses the replacing one, so a completion accepted
+  mid-word overwrites the word instead of leaving its tail behind.
+  <code>activeParameterSupport</code> is what lets a caller mark which argument
+  the cursor is in; without it a signature is a line of text with no indication
+  of where you are in it. And <code>multilineTokenSupport</code> is declared
+  because a doc comment or a raw string is one token across several lines, which
+  a client that cannot take one gets split or dropped.
+</p>
+
+<p>
+  Position encoding is not negotiated. Not declaring
+  <code>general.positionEncodings</code> leaves the protocol default of UTF-16 in
+  force, which <code>doc</code> implements once, in one place, with tests.
+  Offering UTF-8 would mean two encodings in the codebase and a silent column
+  error on any line with a non-ASCII character on it.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The capability reading has been
+  exercised against rust-analyzer only. Every other language this crate speaks
+  has a server whose <code>initialize</code> reply nobody here has read, so
+  which of them name trigger characters, which offer semantic tokens, and which
+  return an empty legend are all open.
+  <em>What would settle it:</em> run each installed server through
+  <code>Client::handshake</code> and print <code>capabilities()</code>.
+</p>
+<span class="src">tools/lsp/src/client.rs &mdash; <code>Capabilities</code>, <code>Capabilities::parse</code>, <code>Client::handshake</code>, <code>Client::capabilities</code>; tools/lsp/src/render.rs &mdash; <code>Legend::parse</code></span>
+
 <h2 id="two-writers">There are two writers to these servers, not one</h2>
 
 <p>
   <strong>This page described one writer until 2026-09-06 and there are two.</strong>
   The <a href="terminal-pages.html#code">Code page</a> holds the same
-  <code>Pool</code> the five tools hold, deliberately: a second copy of a
+  <code>Pool</code> the seven tools hold, deliberately: a second copy of a
   language server is about a gigabyte of memory, and the editor's own change
   notifications keep the server's view current for the model's next call. One
   server per language serves both the person editing and the model asking.
@@ -791,8 +1113,11 @@
   <code>.vscode</code>, <code>Program Files</code> or
   <code>EMMA_LSP_SERVER</code>, and the positive half: that every description
   points at the first two lines of the result and warns about a partial index.
-  <code>the_declarations_cohere_enough_to_register</code> runs all four through
-  a real <code>Registry</code>.
+  <code>the_declarations_cohere_enough_to_register</code> runs all seven through
+  a real <code>Registry</code> and asserts it holds seven names, and
+  <code>the_surface_is_the_seven_tools_and_they_share_one_pool</code> pins the
+  names in order and the <code>Arc</code> strong count at eight, which is the
+  only way the one-pool invariant can be checked at all.
 </p>
 
 <h2 id="proto">The wire, and the argument reader beside it</h2>
@@ -878,8 +1203,13 @@
   <span class="chip unv">unverified</span> This page reads
   <code>lib.rs</code>, <code>tools.rs</code>, <code>server.rs</code>,
   <code>pool.rs</code> and most of <code>render.rs</code> in full, and
-  <code>client.rs</code> (1,484 lines) and <code>doc.rs</code> only in the
-  regions named above. <code>proto.rs</code> and <code>args.rs</code> were not
+  <code>client.rs</code> (1,880 lines, of which 1,458 come before the
+  <code>#[cfg(test)]</code> on line 1,459 &mdash;
+  <span class="chip cert">certified</span> by <code>wc -l</code> and
+  <code>grep -n</code> on 2026-09-06, re-run against a fleet still editing
+  this branch) and <code>doc.rs</code> only in the
+  regions named above, plus the handshake and capability regions this page now
+  describes. <code>proto.rs</code> and <code>args.rs</code> were not
   read, so nothing on this page describes the transport framing or this crate's
   own argument extraction beyond what its callers show.
 </p>

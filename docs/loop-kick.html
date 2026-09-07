@@ -134,8 +134,7 @@ than the spelling:
   <h2 id="failures">The failure list, and why it is not optional</h2>
 
   <p>
-    Without it the plain reading of "continue" is "try again", and the first
-    thing a model retries is the thing that just failed. The labels come from
+    The labels come from
     <code>label_of</code>, the same rendering the memo key is built from, so what
     a kick shows and what the memo refuses describe the same call. See
     <a href="loop-failure.html">Failure</a> for how a label is shortened.
@@ -160,12 +159,10 @@ fn trim_oldest(v: &amp;mut Vec&lt;String&gt;) {
 }</code></pre>
 
   <p>
-    <code>tail(&amp;failed_ever, 5)</code> bounds what one kick shows, keeping
-    the five most recent in their original order.
-    <code>FAILED_EVER_MAX</code> bounds the collection at four times the kick's
-    limit so the cap is not a quieter duplicate of the same number. The list is
-    written into a session record and read back by <code>--resume</code>, so an
-    unbounded collection would be a growing payload rather than a transient one.
+    <code>tail(&amp;failed_ever, 5)</code> bounds what one kick shows, keeping the
+    five most recent in their original order. The list is written into a session
+    record and read back by <code>--resume</code>, so leaving the collection
+    unbounded would grow the payload rather than let it stay transient.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>tail</code>, <code>trim_oldest</code>, <code>FAILED_EVER_MAX</code></span>
 
@@ -220,7 +217,7 @@ continue;</code></pre>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>place</code></span>
 
   <p>
-    <code>term.kick(kicks, max_kicks)</code> is what the user sees, so a nudge is
+    <code>term.kick(kicks, max_kicks)</code> is what you see, so a nudge is
     never silent, and it carries both numbers so a run that is about to stop
     looks different from one that has two nudges left.
   </p>
@@ -240,7 +237,7 @@ continue;</code></pre>
 
   <p>
     The cost is that a goal genuinely needing a fourth nudge stops one step
-    early. It says which limit stopped it, so the user can raise it with
+    early. It says which limit stopped it, so you can raise it with
     <code>--max-kicks</code>.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>

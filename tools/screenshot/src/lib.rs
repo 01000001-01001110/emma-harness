@@ -451,6 +451,19 @@ impl Capture for Commands {
 /// Shared rather than per-backend so the arithmetic has one home and one test.
 /// `sips` does its own on macOS; this is what the Windows arm hands `StretchBlt`
 /// and what the test below pins.
+///
+/// **`cfg` because the only caller is the Windows backend, and clippy on macOS
+/// says so.** The lint is right: in a macOS `--lib` build nothing reaches this,
+/// and the sentence above is what makes it look shared when it is not. `test`
+/// is in the gate because the test below is the reason the arithmetic is worth
+/// keeping in one place at all -- it runs on both platforms and pins the
+/// rounding rule that `sips` and `StretchBlt` are supposed to agree on.
+///
+/// This is the first thing macOS clippy ever caught here. Until 2026-09-07 the
+/// workflow ran clippy on Windows alone, arguing that lints "cannot differ by
+/// platform" -- which is false for exactly this lint, and the reason the
+/// argument is now gone from `build.yml`.
+#[cfg(any(windows, test))]
 pub(crate) fn bounded_dimensions(w: i32, h: i32, max_dim: u32) -> (i32, i32) {
     let longest = w.max(h);
     let max = max_dim as i32;

@@ -81,11 +81,10 @@
     </nav>
 
   <p class="lede">
-    Two directories share the same layout in both flavours; that is why Emma
-    reads a second directory name. A skill is text the model asks for by name;
-    a command is text a person summons with a slash. Neither can change what the
-    runtime does. How strictly each is read depends on whose format the file
-    uses.
+    Two directories share the same layout in both flavours, which is why Emma
+    reads a second directory name. A skill is text the model asks for by name. A
+    command is text you summon with a slash. Neither can change what the runtime
+    does. How strictly each is read depends on whose format the file uses.
   </p>
 
   <div class="key">
@@ -477,10 +476,10 @@ pub struct SkillDef {
 
   <p>
     <code>body.trim()</code> is the second of the two places the "nothing is
-    trimmed" prompt rule is bent, and the module doc says why: a command body is
-    not always-on prompt text, it is text a person typed a <code>/name</code> to
-    summon. A subdirectory under <code>commands/</code> is skipped by the
-    extension test rather than walked.
+    trimmed" prompt rule is bent, and the module doc says why. A command body
+    reaches the model only because you typed a <code>/name</code> to summon it,
+    so it is never always-on prompt text. A subdirectory under
+    <code>commands/</code> is skipped by the extension test, never walked.
   </p>
 
   <p>
@@ -511,8 +510,8 @@ pub struct SkillDef {
 
   <p>
     The tail is appended after a blank line when there is one, and both halves
-    are kept on the <code>Expansion</code> so the session log can record what the
-    person typed as well as what the model was asked. An unknown
+    are kept on the <code>Expansion</code> so the session log can record what you
+    typed as well as what the model was asked. An unknown
     <code>/word</code> is not an error and not a missing command: it returns
     <code>None</code> and passes through to the model as ordinary text, which is
     indistinguishable from a command that "did nothing" if an expansion was

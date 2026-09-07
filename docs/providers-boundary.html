@@ -81,10 +81,8 @@
 
   <p class="lede">
     Two methods and one struct are the whole surface between Emma's loop and
-    any model anywhere. The struct's field order is not cosmetic: it is the
-    order the provider's cache hashes over, and it is a type rather than a
-    convention because a convention in a comment is one a struct literal
-    elsewhere can ignore.
+    any model anywhere. The struct's field order is the order the provider's
+    cache hashes over, which is why it is a type and not a convention.
   </p>
 
   <h2 id="trait">Two methods, and nothing else</h2>
@@ -146,7 +144,7 @@ pub enum Event {
     which runs in <code>Mode::Batch</code> and asserts two
     <code>Retrying</code> events with the comment <em>a silent retry is a
     hang</em>. That test's mutation was not run here: it is claimed on the
-    assertion's own shape, not on a red run somebody watched.
+    assertion's own shape, not on a red run anyone watched.
   </p>
 
   <h2 id="request">A request names its four parts in prefix order</h2>
@@ -187,11 +185,9 @@ pub struct Request {
   <span class="src">crates/llm/src/lib.rs — <code>Request</code></span>
 
   <p>
-    The cache is an exact prefix match, so anything that varies per turn has to
-    sit after everything that does not. Prefix caching requires this field order.
-    Keeping <code>history</code> and <code>query</code> as separate
-    fields is what lets the renderer find the end of the stable part without
-    inspecting messages to guess where a turn began.
+    Keeping <code>history</code> and <code>query</code> as separate fields is
+    what lets the renderer find the end of the stable part without inspecting
+    messages to guess where a turn began.
   </p>
 
   <div class="note">
@@ -543,18 +539,15 @@ pub(crate) fn rank(self) -&gt; u8 {
     <code>https://api.anthropic.com/v1/messages</code>,
     <code>API_VERSION</code> is <code>2023-06-01</code> and goes out as the
     <code>anthropic-version</code> header, and the client timeout is 600
-    seconds. The timeout is the one a reader is likeliest to want to change,
+    seconds. The timeout is the one you are likeliest to want to change,
     and it is not configurable today.
   </p>
 
   <p>
-    <code>base_url</code> is settable only through <code>with_base_url</code>,
-    at construction, which the tests use to point at a loopback stub. Reading
-    it from the environment would be a switch that redirects where the key is
-    sent, in a program that runs inside repositories with whatever environment
-    the shell carries. <code>with_retry</code> is the same shape and swaps the
-    policy; the provider tests use it to make backoff milliseconds rather than
-    seconds.
+    <code>base_url</code> is settable only through <code>with_base_url</code>, at
+    construction, which the tests use to point at a loopback stub.
+    <code>with_retry</code> is the same shape and swaps the policy. The provider
+    tests use it to make backoff milliseconds instead of seconds.
   </p>
 
   <p>
@@ -639,7 +632,7 @@ impl std::fmt::Debug for AnthropicProvider {
       <code>OllamaProvider::startup_notes</code> fills it: a destination that is
       not loopback is named before the first call, along with where it came
       from, so a stale <code>OLLAMA_HOST</code> in a shell profile cannot
-      quietly ship the conversation to a machine the user forgot about. It is a
+      quietly ship the conversation to a machine you forgot about. It is a
       disclosure surface and not a gate. Nothing in the file refuses.
       <span class="chip cert">certified</span>:
       <code>main.rs</code> loops over <code>provider.startup_notes()</code> and
@@ -778,7 +771,7 @@ impl std::fmt::Debug for AnthropicProvider {
     auditable afterwards: <code>input_tokens</code> at or near
     <code>context_window</code> in a session record is the signature of a prompt
     that was cut.
-    <span class="chip test">tested</span> &mdash;
+    <span class="chip test">tested</span>
     <code>a_long_conversation_widens_the_window_and_the_window_is_reported</code>
     goes red when the stamp is removed.
   </p>
@@ -805,13 +798,11 @@ impl std::fmt::Debug for AnthropicProvider {
   <h2 id="compat">A third and a fourth provider, which needed the trait to give nothing</h2>
 
   <p>
-    The section above is the story of what a second provider cost. On 2026-09-06
-    a third and a fourth arrived and cost nothing at all:
+    Ollama made the trait give three times. On 2026-09-06 a third and a fourth
+    provider arrived and cost nothing at all:
     <code>crates/llm/src/openai_compat.rs</code> serves OpenRouter and OpenAI
-    from one file, and no method was added to <code>Provider</code>, no
-    defaulted hook was introduced, and nothing in <code>agent.rs</code> moved.
-    That is stronger evidence that the boundary is one than the Ollama section
-    could offer, because Ollama at least made the trait give three times.
+    from one file, and no method was added to <code>Provider</code>, no defaulted
+    hook was introduced, and nothing in <code>agent.rs</code> moved.
   </p>
 
   <p>
@@ -823,15 +814,14 @@ impl std::fmt::Debug for AnthropicProvider {
     require, and carries <code>temperature_field: None</code> because those
     models refuse the parameter. A trait would have meant five methods returning
     constants and one implementation per host to keep in step.
-    <span class="chip test">tested</span> &mdash; the two hosts are asserted to
+    <span class="chip test">tested</span> The two hosts are asserted to
     differ only in the cap's spelling, against a loopback stub.
   </p>
 
   <p>
-    <code>temperature_field: None</code> is one of two independent reasons
-    nothing reaches an OpenAI reasoning model, and it is worth knowing they are
-    two. The wire refuses to spell the field at all, so a value that arrives
-    here is dropped rather than sent. Upstream of that,
+    Two independent reasons keep a temperature away from an OpenAI reasoning
+    model. <code>temperature_field: None</code> means the wire will not spell the
+    field at all, so a value arriving here is dropped. Upstream of that,
     <code>settings::sampling_defaults</code> is the per-provider table of what
     an absent field means, and all four of its rows leave
     <code>temperature</code> unset, so on an ordinary run nothing arrives to be
@@ -900,8 +890,8 @@ impl std::fmt::Debug for AnthropicProvider {
   </p>
 
   <p>
-    The live test picks its model out of the roster rather than naming one, and
-    that is a finding rather than a style. The first version hardcoded
+    The live test picks its model out of the roster instead of naming one, and
+    it does so because of a failure. The first version hardcoded
     <code>meta-llama/llama-3.3-70b-instruct:free</code>, the id anyone would
     reach for, and the real host answered <em>&ldquo;This model is unavailable
     for free&rdquo;</em> with a 400. A fixture would have gone on pretending the

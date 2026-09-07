@@ -84,15 +84,15 @@
 </nav>
 
 <p class="lede">
-  <code>.emma/tasks/tasks.md</code> is not a serialisation format that happens
-  to be text. It is a document somebody has open in an editor while the agent
-  works, and every constraint in the parser follows from that.
+  <code>.emma/tasks/tasks.md</code> is a document you have open in an editor
+  while the agent works, rather than a serialisation format that happens to be
+  text. Every constraint in the parser follows from that.
 </p>
 
 <p>
   A line nobody changed is written back byte for byte. Nothing is reordered.
-  Completing a task ticks a box where it sits. When a person's edit disappears
-  they stop trusting the file, then stop reading it.
+  Completing a task ticks a box where it sits. When your edit disappears you
+  stop trusting the file, and then you stop reading it.
 </p>
 <span class="src">tools/tasks/src/lib.rs — module doc</span>
 
@@ -361,7 +361,7 @@
 <h2 id="ids">Handles, and the one hard limit</h2>
 
 <p>
-  An id is an annotation, not a requirement. A checkbox line with no handle is a
+  An id is an annotation rather than a requirement. A checkbox line with no handle is a
   real task: its id is derived from a hash of its text, so it is addressable by
   <code>TaskGet</code> and <code>TaskUpdate</code> immediately, without a write.
   That is what lets <code>TaskList</code> stay genuinely read-only.
@@ -370,8 +370,7 @@
 <p>
   The handle is visible, at the end of the line, in backticks. An HTML comment
   parses more cleanly and is invisible in a rendered preview, which is the
-  problem: what a person cannot see, they rewrite over without knowing it was
-  there.
+  problem: what you cannot see, you rewrite over without knowing it was there.
 </p>
 
 <pre><code><span class="c">/// **The space is 16 bits — 65,536 handles — and a file can exhaust it.** That</span>
@@ -411,8 +410,8 @@
 <h2 id="writers">Two writers, no lock</h2>
 
 <p>
-  You cannot lock a file a person is editing in VS Code. An advisory lock the
-  editor does not take part in protects nothing, and a mandatory one turns their
+  You cannot lock a file you are editing in VS Code. An advisory lock the
+  editor does not take part in protects nothing, and a mandatory one turns your
   save into an error dialog. The strategy is to hold the file as
   briefly as possible and to notice when it moved.
 </p>
@@ -468,9 +467,9 @@
 <div class="note warn">
   <span class="h">What the guard cannot catch</span>
   <p>
-    An editor holds the whole file in memory. If a person opened
-    <code>tasks.md</code> at 10:00, Emma writes at 10:01, and the person hits
-    Ctrl-S at 10:02, their editor writes its entire buffer and Emma's line is
+    An editor holds the whole file in memory. If you opened
+    <code>tasks.md</code> at 10:00, Emma writes at 10:01, and you hit
+    Ctrl-S at 10:02, your editor writes its entire buffer and Emma's line is
     gone: no error, no conflict, because from the filesystem's point of view
     that is simply a newer complete file. Only the editor's own "file changed on
     disk" prompt prevents it, and that is the editor's to offer.
@@ -478,7 +477,7 @@
   <p>
     The guard's own window is not zero either. A write landing between the
     confirming read and the rename is lost. It is microseconds wide and not
-    closed; the page says so.
+    closed.
   </p>
 </div>
 
@@ -497,8 +496,8 @@
   The default filter is <code>open</code> rather than <code>all</code>.
   Completed tasks stay in the file forever, so by the end of a long run they
   outnumber the live ones several to one, and reprinting them every turn spends
-  context re-establishing what is already settled. The file grows; the context
-  does not. The counts in the result describe the whole file rather than the
+  context re-establishing what is already settled. The file grows and the
+  context does not. The counts in the result describe the whole file rather than the
   filtered slice, because a model that asked for <code>pending</code> still
   needs to know whether anything is in progress before concluding the work is
   stalled.
@@ -680,8 +679,8 @@
   is a checkbox reading <code>[x]</code> or a note that checkbox owns. A
   <code>## Done</code> heading, a blank line between tasks and any prose that is
   not indented under a completed task all stay where they are. It takes the
-  notes with the task, so somebody who wrote a paragraph under a task they then
-  completed loses it, which is why this is explicit and never something the
+  notes with the task, so if you wrote a paragraph under a task you then
+  completed, you lose it. That is why this is explicit and never something the
   tools do on their own initiative: <code>TaskUpdate</code> still cleans up by
   ticking a box.
   <span class="chip test">tested</span>:

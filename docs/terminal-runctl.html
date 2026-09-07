@@ -91,8 +91,8 @@
     <code>harness_state</code> answers what ran. <code>runctl</code> is the
     other half: pause, resume, cancel, archive, delete, and starting a new run.
     It exists because the Harness page drew those controls against a scheduler
-    Emma does not have, and the answer was not to delete the controls but to
-    notice that Emma already owns the things they name.
+    Emma does not have; the controls stayed, because Emma already owns the
+    things they name.
     <strong>The Harness page reaches all of it since 2026-09-06.</strong>
     This page describes the module; <a href="terminal-pages.html">the pages
     page</a> describes the keys.
@@ -104,9 +104,12 @@
     Thirteen keys on the Harness page reach this module: start a run, archive
     one, delete one, pause, resume, cancel, add a task, sweep the finished
     ones, reorder the queue, write one of the three permission presets, and
-    report what the permission file says today. Archive, delete and sweep ask
-    twice, because each of them destroys something a reader cannot get back by
-    pressing the key again.
+    report what the permission file says today.
+  </p>
+
+  <p>
+    Archive, delete and sweep ask twice. Each of them destroys something you
+    cannot get back by pressing the key again.
   </p>
 
   <p>
@@ -114,10 +117,17 @@
     says so in three places rather than drawing a control that does
     nothing.</strong> Pause, resume and cancel send <code>SIGSTOP</code>,
     <code>SIGCONT</code> and <code>SIGINT</code>, and Windows has no equivalent
-    of any of them. Pressing one produces the refusal's own sentence, naming
-    the platform and the operation; the chip loses its accent while keeping its
-    click rectangle, so a click reaches the same sentence a keystroke does; and
-    the subtitle row carries the note whether or not anybody presses anything.
+    of any of them.
+  </p>
+
+  <p>
+    Press one and you get the refusal's own sentence, naming the platform and
+    the operation. The chip loses its accent while keeping its click rectangle,
+    so a click reaches the same sentence a keystroke does, and the subtitle row
+    carries the note whether or not you press anything.
+  </p>
+
+  <p>
     The other ten work here: <code>runctl</code> gained real Windows arms for
     the process lookup, the detached spawn, archive, delete and the policy
     write when it landed.
@@ -129,11 +139,15 @@
 
   <p>
     <code>policy_summary</code> is the read side of <code>write_policy</code>
-    and deliberately not its inverse. A permission file can hold a mixture no
+    and not its inverse. A permission file can hold a mixture no
     preset would produce, and answering &ldquo;Safe&rdquo; for it would be a
-    summary that reads as a receipt for a write nobody made. It names a preset
-    only when the file matches one exactly, reports what is actually there
-    otherwise, and counts rules carrying a specifier apart, because
+    summary that reads as a receipt for a write nobody made.
+  </p>
+
+  <p>
+    It names a preset only when the file matches one exactly, reports what is
+    actually there otherwise, and counts rules carrying a specifier apart,
+    because
     <code>write_policy</code> leaves those alone and a total that swallowed
     them would claim authorship of somebody else's decision. A file that does
     not parse is said to be unparseable and nothing is claimed about its
@@ -150,16 +164,16 @@
     wrote a session log can be read back out of the log's own file name. That is
     the whole backend. Pause is <code>SIGSTOP</code>, resume is
     <code>SIGCONT</code>, and cancel is <code>SIGINT</code>, which the loop
-    already handles and answers by writing its ending. No queue, no supervisor,
-    no invented state.
+    already handles and answers by writing its ending. There is no queue and no
+    supervisor.
   </p>
 
   <p>
-    Cancel is <code>SIGINT</code> rather than <code>SIGKILL</code> for a reason
-    worth stating: a run that is killed writes no ending, and its log is then
-    indistinguishable from a crashed one. The distinction between &ldquo;somebody
-    stopped this&rdquo; and &ldquo;this fell over&rdquo; is the whole value of
-    the record.
+    Cancel is <code>SIGINT</code> rather than <code>SIGKILL</code> because a run
+    that is killed writes no ending, and its log then looks the same as a
+    crashed one. You want to be able to tell &ldquo;somebody stopped this&rdquo;
+    from &ldquo;this fell over&rdquo;, and that is most of what the record is
+    for.
   </p>
   <span class="src">crates/emma/src/runctl.rs &mdash; module doc, <code>Action</code>, <code>pid_of</code>; crates/emma/src/session.rs &mdash; <code>SessionLog::new_id</code></span>
 
@@ -178,16 +192,15 @@
   <p>
     The last of those is policy rather than safety. A Harness page filtered to
     one repository must not reach into a run somewhere else on the machine,
-    because the reader cannot see that run and cannot judge what stopping it
-    costs.
+    because you cannot see that run and cannot judge what stopping it costs.
   </p>
 
   <p>
     Every refusal is a sentence the page can show, and there are seven of them:
     no pid in the id, the pid is this process, nothing is running there,
     something is running there and it is not Emma, the run belongs elsewhere, the
-    run already finished, and the platform has no such control. A control that
-    goes quiet is the failure this module exists to avoid.
+    run already finished, and the platform has no such control. You always get a
+    sentence back, which is the point of enumerating them.
   </p>
 
   <p>
@@ -195,7 +208,7 @@
     trait with one real implementation and one recording fake, so the
     verification logic is exercised mechanically and no test ever signals a real
     process.
-    <span class="chip test">tested</span> &mdash; nine mutations were applied to
+    <span class="chip test">tested</span> nine mutations were applied to
     the verification and each turned the suite red: the recycled pid, this
     process's own pid, a run in another repository, and a finished run are all
     pinned individually.
@@ -274,10 +287,14 @@
     Archiving moves a session file into an <code>archive</code> subdirectory.
     A subdirectory rather than a marker record, because the run reader reads one
     directory level and no deeper, so moving a file there removes it from every
-    feed without a line of reader code learning a new rule. It is reversible on
-    request: this is the control somebody reaches for to tidy the list, and
-    tidying must not be able to lose a transcript, so a file that is already
-    archived is an error naming that rather than a silent success.
+    feed without a line of reader code learning a new rule.
+  </p>
+
+  <p>
+    It is reversible on request. This is the control you reach for to tidy the
+    list, and tidying must not be able to lose a transcript, so a file that is
+    already archived comes back as an error naming that rather than as a silent
+    success.
   </p>
 
   <p>
@@ -294,26 +311,31 @@
     that cannot be signalled. That reasoning has a hole, since
     <code>Elsewhere</code> refuses a run that may be very much alive, and on Unix
     the hole is narrow because the page only offers archive on rows it listed and
-    it lists rows whose <code>cwd</code> matched. On Windows the same hole is
-    wider and the consequence worse, because Rust's <code>File</code> opens with
-    <code>FILE_SHARE_DELETE</code> and the rename therefore <em>succeeds</em> over
-    a live writer's handle with no error anywhere. So Windows asks the other
-    question: not &ldquo;would we have refused to signal it&rdquo; but &ldquo;can
-    we show nothing is running there&rdquo;. An ending was written, or the pid
-    names nothing, or it names something that is not Emma. Everything else,
-    including a run in another directory and an id with no pid in it, is unknown,
-    and unknown does not archive.
+    it lists rows whose <code>cwd</code> matched.
+  </p>
+
+  <p>
+    On Windows the same hole is wider and the consequence worse. Rust's
+    <code>File</code> opens with <code>FILE_SHARE_DELETE</code>, so the rename
+    <em>succeeds</em> over a live writer's handle with no error anywhere.
+  </p>
+
+  <p>
+    So Windows asks a different question: can we show nothing is running there?
+    An ending was written, or the pid names nothing, or it names something that
+    is not Emma. Everything else, including a run in another directory and an id
+    with no pid in it, is unknown, and unknown does not archive.
     <span class="chip test">tested</span> against a fake process table, both
     directions.
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> as an observation. What the guard
-    defends against &mdash; the rename succeeding over an open
-    <code>FILE_SHARE_DELETE</code> handle while the writer keeps writing into the
-    moved file &mdash; is read out of the standard library's documented open
-    flags rather than watched. Two processes and a <code>std::fs::rename</code>
-    under a live appender, twenty lines, on this box, would settle it.
+    <span class="chip unv">unverified</span> as an observation. The guard defends
+    against a rename succeeding over an open <code>FILE_SHARE_DELETE</code>
+    handle while the writer keeps writing into the moved file, and that is read
+    out of the standard library's documented open flags rather than watched. Two
+    processes and a <code>std::fs::rename</code> under a live appender, twenty
+    lines, on this box, would settle it.
   </p>
 
   <p>
@@ -333,12 +355,15 @@
     A new run is a detached child. On Unix, <code>setsid</code> puts it in its own
     session so a <code>SIGHUP</code> aimed at Emma's process group does not take
     it too, and the three standard streams go to <code>/dev/null</code> so
-    nothing it prints lands on top of the drawn page. This is the one call in the
-    module that is <code>unsafe</code>, because the standard library has no safe
-    spelling for <code>setsid</code>; the other spawn site in the tree uses the
-    safe <code>process_group(0)</code> and is right to, because a shell window
-    only has to not take a signal aimed at Emma, while a detached run has to
-    outlive the terminal.
+    nothing it prints lands on top of the drawn page.
+  </p>
+
+  <p>
+    That is the one <code>unsafe</code> call in the module, because the standard
+    library has no safe spelling for <code>setsid</code>. The other spawn site in
+    the tree uses the safe <code>process_group(0)</code>, which is enough there:
+    a shell window only has to survive a signal aimed at Emma, while a detached
+    run has to outlive the terminal.
   </p>
 
   <p>
@@ -371,10 +396,10 @@
 
   <p>
     A new run can be started under a permissions preset, and <code>Deny All</code>
-    writes out all 26 tool names rather than a wildcard. That is not verbosity:
-    Emma <a href="consent-rules.html">refuses a <code>*</code> in the tool slot of
+    writes out all 26 tool names rather than a wildcard. Emma
+    <a href="consent-rules.html">refuses a <code>*</code> in the tool slot of
     a rule</a>, so &ldquo;deny everything&rdquo; has to be spelled out, and a list
-    that silently missed a tool would be a protection somebody believed they had.
+    that silently missed a tool would be a protection you believed you had.
   </p>
 
   <p>
@@ -389,8 +414,7 @@
     <code>KillShell</code>, which this build does register. A <code>Deny All</code>
     written from that list left the two background-execution tools callable on
     the next run.
-    <span class="chip test">tested</span>, and the test is the whole of the
-    list's trustworthiness.
+    <span class="chip test">tested</span>
   </p>
 
   <p>
@@ -402,8 +426,8 @@
     and the caller is told why.
     <span class="chip cert">certified</span>: the test parses what it wrote back
     through the real rule engine and asserts the decision is <code>Deny</code>
-    for <code>Bash</code>, <code>BashOutput</code> and <code>KillShell</code>.
-    Valid JSON is not the guarantee; a decision is.
+    for <code>Bash</code>, <code>BashOutput</code> and <code>KillShell</code>,
+    rather than merely asserting the file is valid JSON.
   </p>
   <span class="src">crates/emma/src/runctl.rs &mdash; <code>ALL_TOOLS</code>, <code>READ_ONLY_TOOLS</code>, <code>Policy</code>, <code>lists</code>, <code>write_policy</code>; crates/emma/src/permissions.rs &mdash; <code>Rules::parse</code>, <code>remember</code></span>
 

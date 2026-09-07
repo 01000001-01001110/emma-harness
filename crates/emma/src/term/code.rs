@@ -70,7 +70,8 @@
 //!
 //! **The language server decorates; it never delays.** Diagnostics land in the
 //! gutter beside the lines they are about and under the exact span the server
-//! named, `F5` asks what is under the cursor and `F6` where it is defined, and
+//! named, `F5` asks what is under the cursor and `F6` where it is defined,
+//! `F8` asks where it is used and `F10` what the file contains, and
 //! one row under the document carries the server's state, the count and the
 //! message the cursor is sitting on. **Nothing in this module talks to a
 //! server**: it holds an [`Lsp`] that only an [`LspUpdate`] writes, delivered
@@ -864,6 +865,16 @@ impl CodeView {
         // is dropped here for. What is half-typed in the box is the person's
         // and stays.
         self.strip.sent = None;
+        // Every answer about the *previous* file goes with it, and the popup is
+        // the one that could do damage: it inserts into the buffer, so one left
+        // standing across a file switch would put the old file's candidate into
+        // the new file's text. The hover, the panel and the colours are only
+        // wrong on screen, which is reason enough on its own.
+        self.lsp.popup = None;
+        self.lsp.places = None;
+        self.lsp.hover = None;
+        self.lsp.tokens.clear();
+        self.lsp.tokens_for = None;
     }
 
     /// The shell's answer to [`CodeAction::Save`].
@@ -1212,6 +1223,183 @@ pub struct HoverPopup {
     pub scroll: usize,
 }
 
+/// One thing that could be typed here.
+///
+/// A narrowed `emma_tools_lsp::render::Completion`: the page keeps what it
+/// draws and what it inserts, and drops the rest at the boundary rather than
+/// carrying protocol shapes into the view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    /// What the list shows.
+    pub label: String,
+    /// What typing is matched against. Not the label: a server labels a method
+    /// `push(…)` and filters it as `push`, and matching the label is why some
+    /// editors stop finding anything after the bracket.
+    pub filter: String,
+    /// What goes into the buffer.
+    pub insert: String,
+    /// The word this replaces, as a column range on the cursor's line, when the
+    /// server named one. `None` leaves the page to decide, which it does by
+    /// taking the identifier before the cursor.
+    pub replace: Option<(usize, usize)>,
+    /// A word, or empty when the server sent a kind this build does not name.
+    pub kind: &'static str,
+    /// The type or path shown beside the label.
+    pub detail: Option<String>,
+}
+
+impl Diag {
+    /// Whether this diagnostic touches a line at all.
+    ///
+    /// The gutter mark asked this one way round and the underline asked it the
+    /// other, De Morgan'd, in two different functions. One rule, and the next
+    /// person to change what a multi-line span means has one place to change
+    /// it.
+    pub fn spans_line(&self, line: usize) -> bool {
+        line >= self.line && line <= self.end_line
+    }
+}
+
+/// The completion popup: what came back, what has been typed since, and which
+/// row is chosen.
+///
+/// **`typed` is the whole reason this is a struct rather than a list.** A
+/// server answers about one position; the person then keeps typing. Re-asking
+/// on every keystroke is what makes an editor feel slow, so the popup narrows
+/// its own list against the characters typed since it opened, and only asks
+/// again when the answer it holds was marked incomplete.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Popup {
+    /// Everything the server offered, in the server's own ranking.
+    pub items: Vec<Candidate>,
+    /// What has been typed since the request went out, and **only** that.
+    ///
+    /// It is empty at the moment an answer lands, so the list is first drawn
+    /// unnarrowed. That is right for a server which filters by the prefix
+    /// itself — rust-analyzer does — and wrong for one that returns the whole
+    /// set in scope, which would then be shown in full until the next
+    /// keystroke. Seeding this with the identifier before the cursor would fix
+    /// that case; it is not done here, because the fix cannot be certified
+    /// against a server nobody on this project has run, and a wrongly seeded
+    /// filter hides candidates with no visible way to reach them. The doc used
+    /// to claim the seeding was already happening.
+    pub typed: String,
+    /// The chosen row, as an index into [`Self::visible`].
+    pub at: usize,
+    /// The server truncated its own list and expects to be asked again.
+    pub incomplete: bool,
+    /// The line and column the request was made at, so a cursor that has moved
+    /// off that line closes the popup rather than inserting somewhere else.
+    pub origin: (usize, usize),
+}
+
+/// The most rows the popup draws. A glance, like the hover popup: the file
+/// underneath is what the page is for, and a list longer than this is one
+/// nobody reads to the end.
+pub const POPUP_MAX_ROWS: usize = 8;
+
+impl Popup {
+    /// The items that match what has been typed, best first.
+    ///
+    /// Case-insensitive prefix first, then a case-insensitive substring, which
+    /// is the behaviour people expect from every editor they have used. The
+    /// server's ranking is preserved inside each group rather than re-sorted:
+    /// it knows which of two matches is more likely and this does not.
+    pub fn visible(&self) -> Vec<&Candidate> {
+        if self.typed.is_empty() {
+            return self.items.iter().collect();
+        }
+        let needle = self.typed.to_lowercase();
+        let mut prefix = Vec::new();
+        let mut contains = Vec::new();
+        for item in &self.items {
+            let hay = item.filter.to_lowercase();
+            if hay.starts_with(&needle) {
+                prefix.push(item);
+            } else if hay.contains(&needle) {
+                contains.push(item);
+            }
+        }
+        prefix.extend(contains);
+        prefix
+    }
+
+    /// The chosen item, or `None` when nothing matches what has been typed.
+    pub fn chosen(&self) -> Option<&Candidate> {
+        let visible = self.visible();
+        visible
+            .get(self.at.min(visible.len().saturating_sub(1)))
+            .copied()
+    }
+
+    /// Move the selection, clamped rather than wrapped: a list that jumps from
+    /// the bottom to the top under a held key is one people overshoot.
+    pub fn move_by(&mut self, down: bool) {
+        let len = self.visible().len();
+        if len == 0 {
+            self.at = 0;
+            return;
+        }
+        self.at = if down {
+            (self.at + 1).min(len - 1)
+        } else {
+            self.at.saturating_sub(1)
+        };
+    }
+}
+
+/// One row of the places list: a reference, or a symbol in this file.
+///
+/// The two share a type because they share a purpose and a key: both answer
+/// "where do I go", both draw as a path and a line, and both are opened by
+/// pressing Enter on a row. Two nearly identical lists would be two places to
+/// fix the next time the opening rule changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    /// What the row says, and it is **not** the line's own text: a reference
+    /// answer names files the page has not read, so
+    /// `code_lsp::reference_places` writes `path:line`, and `symbol_places`
+    /// writes the symbol's name indented by its nesting. Neither shows a kind.
+    /// This doc claimed both for a while, which is the sort of thing a reader
+    /// only finds out by opening the producers — so the producers are named.
+    pub label: String,
+    /// Repo-relative. A place outside the root is not offered at all, which is
+    /// the containment rule the definition jump already follows.
+    pub rel: String,
+    /// 0-based, as LSP counts and as the page indexes.
+    pub line: usize,
+    pub col: usize,
+}
+
+/// The places panel: references to a symbol, or the symbols in a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Places {
+    /// What was asked, for the header: the symbol's name, or the file's.
+    pub about: String,
+    pub rows: Vec<Place>,
+    pub at: usize,
+}
+
+impl Places {
+    pub fn move_by(&mut self, down: bool) {
+        if self.rows.is_empty() {
+            return;
+        }
+        self.at = if down {
+            (self.at + 1).min(self.rows.len() - 1)
+        } else {
+            self.at.saturating_sub(1)
+        };
+    }
+
+    pub fn chosen(&self) -> Option<&Place> {
+        self.rows.get(self.at)
+    }
+}
+
+/// The most rows the places panel draws at once.
+pub const PLACES_MAX_ROWS: usize = 12;
+
 /// The most hover lines kept. rust-analyzer's hover on a trait method runs to
 /// hundreds; the popup is a glance, and the file underneath is what the page
 /// is for.
@@ -1260,6 +1448,41 @@ pub enum LspUpdate {
         path: String,
         target: DefTarget,
     },
+    /// Where a symbol is used, or what a file contains. An empty list is a
+    /// real answer and says so rather than opening an empty panel.
+    Places {
+        path: String,
+        about: String,
+        rows: Vec<Place>,
+    },
+    /// What every run of characters in the file is, for colour.
+    Tokens {
+        path: String,
+        items: Vec<emma_tools_lsp::render::Token>,
+    },
+    /// Which characters the server says should open a list, learned from the
+    /// handshake. Sent once per server rather than guessed, because a guess is
+    /// wrong for every language whose server disagrees with it.
+    Triggers {
+        completion: Vec<String>,
+        signature: Vec<String>,
+    },
+    /// What could be typed here. An empty list is a real answer and closes the
+    /// popup rather than leaving the last one on screen.
+    Completions {
+        path: String,
+        items: Vec<Candidate>,
+        incomplete: bool,
+        /// Where the request was made, so an answer that arrives after the
+        /// cursor has moved off the line is dropped rather than applied to a
+        /// position it was not about.
+        origin: (usize, usize),
+    },
+    /// Which argument the cursor is in, already rendered to one line.
+    Signature {
+        path: String,
+        line: Option<String>,
+    },
     /// The bridge could not do the thing at all, in its own words.
     Note {
         path: String,
@@ -1277,6 +1500,29 @@ pub struct Lsp {
     pub path: Option<String>,
     pub diags: Vec<Diag>,
     pub hover: Option<HoverPopup>,
+    /// The completion popup, when one is open.
+    pub popup: Option<Popup>,
+    /// References, or this file's symbols, when either was asked for.
+    pub places: Option<Places>,
+    /// What the server said each run of characters in the open file is, for
+    /// colour. Empty when there is no server, which draws plain text rather
+    /// than a highlighter's guess.
+    pub tokens: Vec<emma_tools_lsp::render::Token>,
+    /// Which file [`Self::tokens`] describes, so a stale set is dropped rather
+    /// than painted over a different file.
+    pub tokens_for: Option<String>,
+    /// Characters that open a completion list, as the server named them.
+    pub completion_triggers: Vec<String>,
+    /// Characters that open signature help, as the server named them.
+    pub signature_triggers: Vec<String>,
+    /// Set by typing when the character warrants asking, read and cleared by
+    /// the shell.
+    ///
+    /// **A flag rather than a call, because the page cannot reach the
+    /// bridge.** The page knows what was typed and the shell owns the channel,
+    /// and this is the seam between them: the same shape `code_line` uses for
+    /// the chat strip.
+    pub want_completion: bool,
     /// A one-line answer that is not a diagnostic: a definition outside the
     /// root, a hover with nothing in it, a request that timed out.
     pub note: Option<String>,
@@ -1323,7 +1569,7 @@ impl Lsp {
     pub fn at_line(&self, line: usize) -> Option<&Diag> {
         self.diags
             .iter()
-            .filter(|d| line >= d.line && line <= d.end_line)
+            .filter(|d| d.spans_line(line))
             .min_by_key(|d| d.severity)
     }
 }
@@ -1405,6 +1651,84 @@ impl CodeView {
                     }
                 }
             }
+            LspUpdate::Places { path, about, rows } => {
+                if open.as_deref() != Some(path.as_str()) {
+                    return None;
+                }
+                if rows.is_empty() {
+                    self.lsp.places = None;
+                    self.lsp.note = Some(format!("no results for {about}"));
+                    return None;
+                }
+                self.lsp.places = Some(Places { about, rows, at: 0 });
+                None
+            }
+            LspUpdate::Tokens { path, items } => {
+                if open.as_deref() == Some(path.as_str()) {
+                    self.lsp.tokens_for = Some(path);
+                    self.lsp.tokens = items;
+                }
+                None
+            }
+            LspUpdate::Triggers {
+                completion,
+                signature,
+            } => {
+                self.lsp.completion_triggers = completion;
+                self.lsp.signature_triggers = signature;
+                None
+            }
+            LspUpdate::Completions {
+                path,
+                items,
+                incomplete,
+                origin,
+            } => {
+                if open.as_deref() != Some(path.as_str()) {
+                    return None;
+                }
+                // An answer about a position the cursor has left is dropped.
+                // Applying it would offer members of whatever was under the
+                // cursor a moment ago, at a place they do not belong.
+                let here = self.open.as_ref().map(|o| (o.line, o.col));
+                if here.map(|(l, _)| l) != Some(origin.0) {
+                    return None;
+                }
+                if items.is_empty() {
+                    self.lsp.popup = None;
+                    self.lsp.note = Some("nothing to complete here".to_string());
+                    return None;
+                }
+                // Whatever has been typed since the request went out narrows
+                // the list immediately, so a fast typist does not see the
+                // popup flash the unfiltered set.
+                let typed = here
+                    .map(|(_, col)| col.saturating_sub(origin.1))
+                    .and_then(|extra| {
+                        let o = self.open.as_ref()?;
+                        let line = o.lines.get(o.line)?;
+                        let chars: Vec<char> = line.chars().collect();
+                        Some(chars.get(origin.1..origin.1 + extra)?.iter().collect())
+                    })
+                    .unwrap_or_default();
+                self.lsp.popup = Some(Popup {
+                    items,
+                    typed,
+                    at: 0,
+                    incomplete,
+                    origin,
+                });
+                None
+            }
+            LspUpdate::Signature { path, line } => {
+                if open.as_deref() == Some(path.as_str()) {
+                    // The signature shares the note row rather than opening a
+                    // second popup: two floating boxes over three lines of code
+                    // is a page nobody can read.
+                    self.lsp.note = line;
+                }
+                None
+            }
             LspUpdate::Note { path, text } => {
                 if open.as_deref() == Some(path.as_str()) {
                     self.lsp.note = Some(text);
@@ -1437,6 +1761,54 @@ impl CodeView {
         self.lsp.at_line(open.line)
     }
 
+    /// Put the chosen completion into the buffer.
+    ///
+    /// The range replaced is the server's when it named one, and the identifier
+    /// before the cursor when it did not. That fallback is not a guess about
+    /// the language: it is the same rule every editor uses, and the server's
+    /// own range is preferred precisely because it *is* language-aware.
+    pub fn accept_completion(&mut self) -> CodeAction {
+        let origin = self.lsp.popup.as_ref().map(|p| p.origin);
+        let Some(chosen) = self.lsp.popup.as_ref().and_then(|p| p.chosen()).cloned() else {
+            // Nothing matches what has been typed. Closing without inserting is
+            // the honest answer; inserting the first item of a list the person
+            // has typed past is how an editor writes something nobody asked for.
+            self.lsp.popup = None;
+            return CodeAction::FocusChanged;
+        };
+        self.lsp.popup = None;
+        let Some(o) = self.open.as_mut() else {
+            return CodeAction::FocusChanged;
+        };
+        let Some(line) = o.lines.get(o.line).cloned() else {
+            return CodeAction::FocusChanged;
+        };
+        let chars: Vec<char> = line.chars().collect();
+        // **The server's range is only good where the server was asked.** It
+        // was computed at `origin`, and the list narrows as somebody types
+        // without asking again, so by the time this runs the cursor has usually
+        // moved. rust-analyzer answers a dot completion with an *empty* replace
+        // range at the request position -- certified, 1.94.1 -- so applying it
+        // after three more letters inserts the candidate and leaves those three
+        // behind: `c.pus` accepted as `push` became `c.pushpus`. When the cursor
+        // has moved, the word before it is the honest range, which is the same
+        // rule every editor uses and the same fallback a server naming no range
+        // already gets.
+        let moved = origin != Some((o.line, o.col));
+        let (from, to) = match chosen.replace.filter(|_| !moved) {
+            Some((a, b)) => (a.min(chars.len()), b.min(chars.len())),
+            None => (word_start(&chars, o.col), o.col.min(chars.len())),
+        };
+        let mut next: String = chars[..from].iter().collect();
+        next.push_str(&chosen.insert);
+        next.extend(chars[to..].iter());
+        o.lines[o.line] = next;
+        o.col = from + chosen.insert.chars().count();
+        o.dirty = true;
+        o.clamp();
+        CodeAction::FocusChanged
+    }
+
     /// Ask for hover or a definition, if there is a file to ask about.
     ///
     /// The refusal is the honest half: with no readable file open there is no
@@ -1449,6 +1821,23 @@ impl CodeView {
         }
         self.lsp.note = None;
         action
+    }
+
+    /// Ask for a completion list, which needs one thing more than the others.
+    ///
+    /// **The document has to be being edited.** Every other question here
+    /// answers into a note or a panel, and this one answers into a popup whose
+    /// only exit is a key that `edit_key` owns: opened from the tree or from a
+    /// read-only document, it covered the code and nothing dismissed it, and
+    /// `Esc` closed the page out from under it. Worse, it survived opening a
+    /// second file, so accepting it later inserted the first file's candidate
+    /// into the second file's buffer.
+    fn ask_complete(&mut self) -> CodeAction {
+        if !self.editing() {
+            self.lsp.note = Some("press Enter to edit before asking what can be typed".to_string());
+            return CodeAction::FocusChanged;
+        }
+        self.ask_lsp(CodeAction::Complete)
     }
 }
 
@@ -1463,7 +1852,8 @@ impl CodeView {
 /// process crosses this enum; the handler below never touches disk, which is
 /// what makes it testable without a repository.
 ///
-/// The LSP half adds `Hover` and `Definition`.
+/// The LSP half adds `Hover`, `Definition`, `Complete`, `References`,
+/// `Symbols` and the `Goto` that opens a row of the last two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeAction {
     /// Not this page's key (or a chord/release): let it fall through.
@@ -1488,6 +1878,16 @@ pub enum CodeAction {
     /// second thing to get wrong on the terminals that already refuse the
     /// first.
     Copy(String),
+    /// Ask what could be typed at the cursor. The answer arrives as
+    /// [`LspUpdate::Completions`] and opens the popup.
+    Complete,
+    /// Open a row from the places panel. The column is still a UTF-16
+    /// offset, because the file it indexes may not have been read yet.
+    Goto(Place),
+    /// Ask where the symbol under the cursor is used.
+    References,
+    /// Ask what this file contains.
+    Symbols,
     /// A question about the open file, already composed into the line a person
     /// could have typed ([`compose_ask`]).
     ///
@@ -1551,48 +1951,73 @@ pub fn takes_key(v: &CodeView, key: KeyEvent) -> bool {
         return false;
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return key.code == KeyCode::Char('s') && v.editing();
+        // **Two chords now, and the second was advertised for a fortnight
+        // without ever arriving.** `Ctrl+space` is named on the help row and in
+        // the module header, and this predicate returned `false` for it, so the
+        // completion arm in `handle_key` was unreachable code and the key did
+        // nothing at all -- the exact "drawn control that does nothing" the
+        // page refuses everywhere else. It is admitted here and answered above
+        // the save chord, because the blanket `Ctrl` arm below that would
+        // otherwise *save the file* when somebody asked for a completion.
+        return key.code == KeyCode::Char(' ') || (key.code == KeyCode::Char('s') && v.editing());
     }
     true
 }
 
 /// One key, against the whole page.
 ///
-/// Five layers, in this order, because each can only be reached by getting
-/// past the one above it:
+/// The layers, in this order, because each can only be reached by getting past
+/// the one above it. **The list is unnumbered on purpose**: it used to say
+/// "five layers" over six of them, and by the time the overlays were added it
+/// was a count nobody had recounted.
 ///
-/// 1. **[`takes_key`]** — releases and Alt are never ours, and neither is Ctrl
-///    but for the save chord.
-/// 2. **The save chord**, above the warning below it, because saving is the
-///    way *out* of an unsaved-changes warning and must not be the key that
-///    cancels one.
-/// 3. **An armed warning**, which consumes the key that answers it.
-/// 4. **The function keys**, which work from anywhere on the page — including
-///    from inside the document, where every letter is text. That is the whole
-///    reason they are function keys.
-/// 5. **The chat strip**, when it has the keyboard — and only then, which is
-///    the whole of "the strip must not eat a key the editor needs": the strip
-///    is one branch of one layer, not a rule beside the layers.
-/// 6. The editor, when the document is being edited, or the browser otherwise.
+/// - **[`takes_key`]** — releases and Alt are never ours, and neither is Ctrl
+///   but for the save chord.
+/// - **The save chord**, above the warning below it, because saving is the way
+///   *out* of an unsaved-changes warning and must not be the key that cancels
+///   one.
+/// - **An armed warning**, which consumes the key that answers it. **Above the
+///   overlays, and that is a fix rather than a preference.** A places answer
+///   can land while a warning is armed — press `F8` on an edited buffer, then
+///   `Esc` — and with the panel above the warning the panel ate the key that
+///   would have cancelled it, leaving the warning armed with its notice on
+///   screen so the *next* matching key confirmed a discard. A destructive
+///   action must never be reachable by a key somebody thought was closing a
+///   list.
+/// - **The overlays**, places before hover. Each takes every key that reaches
+///   it, the accent picker's rule: it covers the text, and a key that fell
+///   through to the editor while a panel hid the line would edit a line the
+///   person cannot see. **Places first, because that is what the paint draws.**
+///   Both can be set at once — `F8` then `F5` before the references answer
+///   lands — and `draw_body` resolves that in favour of the panel, so the
+///   keyboard has to resolve it the same way. It did not, and the first key
+///   after that pair silently closed an invisible hover.
+/// - **The function keys**, which work from anywhere on the page — including
+///   from inside the document, where every letter is text. That is the whole
+///   reason they are function keys.
+/// - **The chat strip**, when it has the keyboard — and only then, which is
+///   the whole of "the strip must not eat a key the editor needs": the strip
+///   is one branch of one layer, not a rule beside the layers.
+/// - The editor, when the document is being edited, or the browser otherwise.
 pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if !takes_key(v, key) {
         return CodeAction::None;
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        // `takes_key` let exactly one chord through.
+        // `takes_key` lets two chords through, and this one must be answered
+        // before the save: an unqualified `Ctrl` arm would turn a request for a
+        // completion into a write to disk.
+        if key.code == KeyCode::Char(' ') {
+            return v.ask_complete();
+        }
         return v.request_save();
     }
     if key.code == KeyCode::F(2) {
         return v.request_save();
     }
-    // The hover popup takes every key that reaches it, the accent picker's
-    // rule: it covers the text, and a key that fell through to the editor
-    // while a panel hid the line would edit a line the person cannot see. It
-    // sits below the save chord deliberately, so `Ctrl+s` and `F2` still save
-    // with a popup open.
-    if v.lsp.hover.is_some() {
-        return hover_key(v, key);
-    }
+    // Above the overlays: a panel that ate the answer to this would leave the
+    // warning armed and its notice on screen, and the next matching key would
+    // confirm a discard nobody had just asked for. See the layer list above.
     if let Some(pending) = v.armed.take() {
         v.notice = None;
         // The same key again confirms; anything else cancels and is **not**
@@ -1602,6 +2027,19 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         } else {
             CodeAction::FocusChanged
         };
+    }
+    // The places panel first, because `draw_body` draws it over the hover: the
+    // two can both be set, and whichever is on screen is the one that owns the
+    // arrows. Unlike the completion popup it is a *destination*, so Enter
+    // belongs to it rather than to the buffer underneath.
+    if v.lsp.places.is_some() {
+        return places_key(v, key);
+    }
+    // The hover popup takes every key that reaches it, for the same reason. It
+    // sits below the save chord deliberately, so `Ctrl+s` and `F2` still save
+    // with a popup open.
+    if v.lsp.hover.is_some() {
+        return hover_key(v, key);
     }
     match key.code {
         KeyCode::F(3) => return v.toggle_mode(),
@@ -1618,6 +2056,18 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         // refuse in words when there is no readable file to ask about.
         KeyCode::F(5) => return v.ask_lsp(CodeAction::Hover),
         KeyCode::F(6) => return v.ask_lsp(CodeAction::Definition),
+        // The two list answers. `F8` and `F10` rather than the pair after
+        // `F6`, because `F7` already opens the outside editor and `F9` already
+        // asks for a completion, and moving either to keep these adjacent
+        // would change a key somebody has already learned.
+        KeyCode::F(8) => return v.ask_lsp(CodeAction::References),
+        KeyCode::F(10) => return v.ask_lsp(CodeAction::Symbols),
+        // **Two spellings, because one of them does not survive every
+        // terminal.** `Ctrl+Space` is the chord every editor uses and some
+        // terminals swallow it; `F9` is the escape hatch that always arrives.
+        // Both are drawn on the help row, so nobody has to discover the second
+        // after the first appeared to do nothing.
+        KeyCode::F(9) => return v.ask_complete(),
         _ => {}
     }
     v.notice = None;
@@ -1699,6 +2149,38 @@ fn hover_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     CodeAction::FocusChanged
 }
 
+/// The keys the places panel owns while it is open.
+///
+/// It takes **every** key, the hover popup's rule rather than the completion
+/// popup's: this panel covers the code and is a list somebody is reading, so a
+/// key falling through would edit a line hidden behind it. Enter opens the
+/// chosen row and any other key closes the panel, which makes leaving it the
+/// cheapest thing on the page.
+///
+/// `None` for the returned action when the row names the file already open:
+/// the jump is a cursor move this side can make, and nothing needs to be read.
+fn places_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
+    match key.code {
+        KeyCode::Up | KeyCode::Down => {
+            if let Some(places) = v.lsp.places.as_mut() {
+                places.move_by(key.code == KeyCode::Down);
+            }
+            CodeAction::FocusChanged
+        }
+        KeyCode::Enter => match v.lsp.places.take() {
+            Some(p) => match p.rows.get(p.at) {
+                Some(row) => CodeAction::Goto(row.clone()),
+                None => CodeAction::FocusChanged,
+            },
+            None => CodeAction::FocusChanged,
+        },
+        _ => {
+            v.lsp.places = None;
+            CodeAction::FocusChanged
+        }
+    }
+}
+
 /// Whether this key confirms a pending discard. It is the key that asked for
 /// it: pressing the same thing twice is the gesture, and every other key
 /// cancels.
@@ -1706,6 +2188,141 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
     match p {
         Pending::Close => code == KeyCode::Esc,
         Pending::Open(_) => code == KeyCode::Enter,
+    }
+}
+
+/// What the server said this character is, as a colour role.
+///
+/// A linear scan of **one line's** tokens, which is what [`tokens_on_line`]
+/// hands it: a line has a handful, and a map built per repaint would cost more
+/// than it saves. `Role::Text` when nothing covers the character, which is both
+/// the answer for ordinary identifiers and the answer when there is no server.
+fn syntax_role(tokens: &[emma_tools_lsp::render::Token], col: usize) -> Role {
+    use emma_tools_lsp::render::TokenKind;
+    let Some(token) = tokens.iter().find(|t| col >= t.start && col < t.end) else {
+        return Role::Text;
+    };
+    match token.kind {
+        TokenKind::Comment => Role::Comment,
+        TokenKind::Keyword => Role::Keyword,
+        TokenKind::Str => Role::Str,
+        TokenKind::Number => Role::Number,
+        TokenKind::Type => Role::Type,
+        TokenKind::Func => Role::Func,
+        TokenKind::Other => Role::Text,
+    }
+}
+
+/// The run of tokens that belong to one line.
+///
+/// **Two binary searches rather than a filter, and the reason is a measurement
+/// rather than a preference.** `parse_tokens` returns the answer in the order
+/// the wire sent it, which is line order, so the tokens for a line are a
+/// contiguous run. Before this the painter asked every token in the file about
+/// every cell it drew: 28,330 tokens for this file against roughly five
+/// thousand cells, on every repaint, which is every keystroke.
+///
+/// An empty slice for a line with nothing on it, and for every line when there
+/// is no server — the same answer, which is what makes the caller's plain-text
+/// fallback one branch instead of two.
+fn tokens_on_line(
+    tokens: &[emma_tools_lsp::render::Token],
+    line: usize,
+) -> &[emma_tools_lsp::render::Token] {
+    let start = tokens.partition_point(|t| t.line < line);
+    let end = start + tokens[start..].partition_point(|t| t.line == line);
+    &tokens[start..end]
+}
+
+/// Whether typing `c` should ask for a completion list.
+///
+/// **Two reasons to ask, and they are different questions.** A trigger
+/// character is the server's own claim that something follows it: a dot in
+/// Rust, a colon, an open bracket. Those open a list immediately, with nothing
+/// typed, because the useful answer is the whole set of members. An identifier
+/// character opens one only once there are enough letters to narrow it, because
+/// a list of everything in scope after one letter is a list nobody reads.
+///
+/// The word is measured **after** the typed character has gone in, so
+/// `MIN_WORD` of 3 means the list appears on the third letter. Later than a
+/// graphical editor, deliberately: there a suggestion list floats over its own
+/// layer, and here it covers the code being written, so it has to earn the
+/// rows. Three is also far enough in that the request is cheap while still
+/// ahead of the person.
+fn should_complete(v: &CodeView, c: char) -> bool {
+    if v.lsp
+        .completion_triggers
+        .iter()
+        .any(|t| t == &c.to_string())
+    {
+        return true;
+    }
+    if !(c.is_alphanumeric() || c == '_') {
+        return false;
+    }
+    // Already open: typing narrows what is there rather than asking again,
+    // unless the server truncated its own answer and asked to be re-queried.
+    if let Some(popup) = v.lsp.popup.as_ref() {
+        return popup.incomplete;
+    }
+    let Some(o) = v.open.as_ref() else {
+        return false;
+    };
+    let Some(line) = o.lines.get(o.line) else {
+        return false;
+    };
+    let chars: Vec<char> = line.chars().collect();
+    o.col.saturating_sub(word_start(&chars, o.col)) >= MIN_WORD
+}
+
+/// How long the word must be, counting the character just typed, before a list
+/// opens by itself.
+pub const MIN_WORD: usize = 3;
+
+/// Where the identifier under the cursor starts.
+///
+/// The fallback when a server names no range, and deliberately the dullest
+/// possible rule: letters, digits and underscore. Every language this build
+/// speaks agrees about those, and a cleverer rule would be a second opinion
+/// about syntax in a crate whose whole point is asking the server instead.
+fn word_start(chars: &[char], col: usize) -> usize {
+    let mut at = col.min(chars.len());
+    while at > 0 && (chars[at - 1].is_alphanumeric() || chars[at - 1] == '_') {
+        at -= 1;
+    }
+    at
+}
+
+/// The keys the completion popup owns while it is open, and only those.
+///
+/// **Everything else falls through to the editor**, which is the rule that
+/// keeps this from being the feature people turn off. A popup that swallowed
+/// Enter would stop somebody adding a line; one that swallowed Backspace would
+/// strand them. So this answers for exactly six keys and refuses the rest, and
+/// typing a character both inserts it and narrows the list.
+///
+/// `None` means the popup did not take the key.
+fn popup_key(v: &mut CodeView, key: KeyEvent) -> Option<CodeAction> {
+    let popup = v.lsp.popup.as_mut()?;
+    match key.code {
+        KeyCode::Esc => {
+            v.lsp.popup = None;
+            Some(CodeAction::FocusChanged)
+        }
+        KeyCode::Up => {
+            popup.move_by(false);
+            Some(CodeAction::FocusChanged)
+        }
+        KeyCode::Down => {
+            popup.move_by(true);
+            Some(CodeAction::FocusChanged)
+        }
+        // Both accept, because both are what people press. Tab is the habit
+        // from every editor; Enter is what somebody who has never used one
+        // tries. Neither reaches the buffer as a character while the popup is
+        // up, which is the one thing this layer takes away.
+        KeyCode::Tab | KeyCode::Enter => Some(v.accept_completion()),
+        _ => None,
     }
 }
 
@@ -1718,6 +2335,10 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
 /// Typing, Enter, Backspace and Delete all replace a live selection, which is
 /// what every editor does and what makes a selection worth having.
 fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
+    // The popup first, and it takes six keys. See `popup_key`.
+    if let Some(action) = popup_key(v, key) {
+        return action;
+    }
     let rows = v.body_rows;
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
@@ -1733,6 +2354,11 @@ fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         }
         _ => {}
     }
+    // Set by the character arm below, applied after the buffer borrow ends.
+    let mut narrow: Option<char> = None;
+    // The character typed, so the trigger decision can be made once the borrow
+    // is over and the whole view is readable again.
+    let mut ask = '\0';
     let Some(o) = v.open.as_mut() else {
         return CodeAction::None;
     };
@@ -1790,10 +2416,37 @@ fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         KeyCode::Char(c) => {
             o.delete_selection();
             o.insert_char(c);
+            // The popup narrows against what has been typed since it opened,
+            // rather than re-asking the server on every keystroke. Re-asking is
+            // what makes an editor feel slow; the exception is a list the
+            // server marked incomplete, which it truncated and expects to be
+            // asked about again.
+            narrow = Some(c);
+            ask = c;
         }
         _ => return CodeAction::None,
     }
     o.follow_cursor(rows);
+    // After the buffer borrow ends. A typed character narrows an open popup,
+    // and closes it once nothing matches: a list showing items that do not
+    // contain what is on screen is worse than no list.
+    if let Some(c) = narrow {
+        let gone = match v.lsp.popup.as_mut() {
+            Some(popup) => {
+                popup.typed.push(c);
+                popup.at = 0;
+                popup.visible().is_empty()
+            }
+            None => false,
+        };
+        if gone {
+            v.lsp.popup = None;
+        }
+    }
+    if ask != '\0' && should_complete(v, ask) {
+        // The shell reads and clears this; the page cannot reach the channel.
+        v.lsp.want_completion = true;
+    }
     CodeAction::FocusChanged
 }
 
@@ -2979,10 +3632,24 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
     }
     // Last, and over the document rather than over the whole body: a popup
     // that covered the header would hide the path of the file it is about.
-    if let Some(popup) = v.lsp.hover.as_ref() {
+    if let Some(places) = v.lsp.places.as_ref() {
+        // Above both, because it is the only one of the three that took the
+        // keyboard: drawing a second box over a list somebody is arrowing
+        // through would leave two things claiming the same arrow key.
+        if content.width > 0 && content.height > 0 {
+            draw_places(content, buf, places, skin);
+        }
+    } else if let Some(popup) = v.lsp.hover.as_ref() {
         if content.width > 0 && content.height > 0 {
             let rect = draw_hover(content, buf, popup, skin);
             out.hover = (rect.width > 0 && rect.height > 0).then_some(rect);
+        }
+    } else if let Some(popup) = v.lsp.popup.as_ref() {
+        // Only when no hover is up. Two overlapping boxes over three lines of
+        // code is a page nobody can read, and the hover was asked for
+        // explicitly while this one can open on its own.
+        if content.width > 0 && content.height > 0 {
+            draw_popup(content, buf, v, popup, skin);
         }
     }
     out
@@ -3082,14 +3749,19 @@ pub const EXIT_HINT: &str = "Alt+c closes";
 /// one, because the editor's keys and the browser's mean different things on
 /// the same keyboard and a row naming both would be a row naming neither.
 fn help_line(v: &CodeView) -> String {
+    // First, because the panel has the keyboard: a row naming the editor's
+    // keys while the panel owns them would name keys that do nothing.
+    if v.lsp.places.is_some() {
+        return "↑/↓ pick a place · Enter opens it · any other key closes".to_string();
+    }
     if v.focus == Focus::Chat {
         return "type a question about the open file · Enter sends it · Esc back to the file \
                 · F2 saves"
             .to_string();
     }
     if v.editing() {
-        return "typing edits · Ctrl+s or F2 saves · Shift+arrows select · F4 copies \
-                · Esc read-only"
+        return "typing edits · Ctrl+space or F9 completes · Ctrl+s or F2 saves \
+                · Shift+arrows select · F4 copies · Esc read-only"
             .to_string();
     }
     match v.mode {
@@ -3100,9 +3772,16 @@ fn help_line(v: &CodeView) -> String {
             "↑/↓ pick a commit · Enter shows its patch · b back to the file · F3 or click FILE"
                 .to_string()
         }
-        Mode::File => "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits \
-                       · F3 HISTORY · F5 hover · F6 definition · F7 editor"
-            .to_string(),
+        // One `concat!` rather than a `\`-continued literal. rustfmt joins a
+        // continued string back onto one line and keeps the *leading* spaces of
+        // the following line, which put twenty-four of them into the middle of
+        // this row on the screen. `no_help_row_has_a_gap_in_it` is the receipt.
+        Mode::File => concat!(
+            "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits",
+            " · F3 HISTORY · F5 hover · F6 definition · F8 uses",
+            " · F10 outline · F9 complete · F7 editor",
+        )
+        .to_string(),
     }
 }
 
@@ -3155,7 +3834,23 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
     // Diagnostics decorate this file only when they are *for* this file. A
     // stale set is not drawn dim; it is not drawn.
     let diags = (v.lsp.path.as_deref() == Some(open.path.as_str())).then_some(&v.lsp);
+    // The server's own account of what each run of characters is. Empty when
+    // there is no server, or when the answer is about a different file, which
+    // draws plain text rather than colour from a stale set.
+    let tokens: &[emma_tools_lsp::render::Token] =
+        if v.lsp.tokens_for.as_deref() == Some(open.path.as_str()) {
+            &v.lsp.tokens
+        } else {
+            &[]
+        };
     for (i, ln) in open.lines.iter().enumerate().skip(top).take(h) {
+        // **The line's own tokens, found once for the line rather than scanned
+        // for out of the whole file once per character.** `syntax_role`'s doc
+        // claimed the former and the code did the latter: this file yields
+        // 28,330 tokens from rust-analyzer, and the inner loop asked all of
+        // them about every cell it painted. The answer is ordered by line, so
+        // the slice is a binary search.
+        let line_tokens = tokens_on_line(tokens, i);
         let row_chars: Vec<char> = ln.chars().collect();
         let (sel_a, sel_b) = match sel {
             Some((a, b)) if i >= a.0 && i <= b.0 => (
@@ -3219,7 +3914,13 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
                     .bold(d.severity.role())
                     .add_modifier(ratatui::style::Modifier::UNDERLINED)
             } else {
-                skin.palette.style(Role::Text)
+                // **The lowest rung of the ladder**, and the order above it is
+                // the point: the cursor says where the person is, the
+                // selection what they have taken, the diagnostic where the
+                // compiler objects, and syntax colour is what the text *is*.
+                // A comment under the cursor is drawn as the cursor, because
+                // losing the cursor is worse than losing the colour.
+                skin.palette.style(syntax_role(line_tokens, idx))
             };
             spans.push(Span::styled(glyph, style));
             x += gwid;
@@ -3240,7 +3941,7 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
 /// expected here" - still marks one cell, because a decoration nobody can see
 /// is the same as no decoration.
 fn covers(d: &Diag, line: usize, col: usize) -> bool {
-    if line < d.line || line > d.end_line {
+    if !d.spans_line(line) {
         return false;
     }
     let start = if line == d.line { d.start_col } else { 0 };
@@ -3250,6 +3951,36 @@ fn covers(d: &Diag, line: usize, col: usize) -> bool {
         usize::MAX
     };
     col >= start && col < end
+}
+
+/// Clear a rectangle, draw the border round it, and hand back the inside.
+///
+/// **The clearing is the part worth a function.** Every floating thing on this
+/// page — the hover, the completion list, the places panel — is drawn last, on
+/// top of a document that has already been painted, and a border laid over live
+/// text with the text still showing through reads as corruption rather than as
+/// an overlay. The rule was written out three times and the argument for it
+/// once, so two of the three could have lost it without anybody noticing.
+///
+/// The order matters and is the reason this is not two calls: the fill covers
+/// only the inside, so it must happen before `render` puts the border on the
+/// cells around it — filling afterwards would erase the border's own row.
+fn overlay(buf: &mut Buffer, rect: Rect, skin: &Skin) -> Rect {
+    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
+    let inner = block.inner(rect);
+    for y in inner.y..inner.bottom() {
+        put(
+            buf,
+            Rect::new(inner.x, y, inner.width, 1),
+            0,
+            Line::from(Span::styled(
+                " ".repeat(inner.width as usize),
+                skin.palette.style(Role::Text),
+            )),
+        );
+    }
+    block.render(rect, buf);
+    inner
 }
 
 /// The hover popup, over the document.
@@ -3274,23 +4005,7 @@ fn draw_hover(area: Rect, buf: &mut Buffer, popup: &HoverPopup, skin: &Skin) -> 
         return Rect::new(area.x, area.y, 0, 0);
     }
     let rect = Rect::new(area.x, area.y, want_w.min(area.width), want_h);
-    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
-    let inner = block.inner(rect);
-    // The cells under the popup are overwritten rather than blended: a border
-    // drawn over live text with the text still showing through reads as
-    // corruption rather than as an overlay.
-    for y in inner.y..inner.bottom() {
-        put(
-            buf,
-            Rect::new(inner.x, y, inner.width, 1),
-            0,
-            Line::from(Span::styled(
-                " ".repeat(inner.width as usize),
-                skin.palette.style(Role::Text),
-            )),
-        );
-    }
-    block.render(rect, buf);
+    let inner = overlay(buf, rect, skin);
     for (row, line) in popup
         .lines
         .iter()
@@ -3313,6 +4028,177 @@ fn draw_hover(area: Rect, buf: &mut Buffer, popup: &HoverPopup, skin: &Skin) -> 
         );
     }
     rect
+}
+
+/// The completion popup, under the cursor's line where possible.
+///
+/// **Under the line rather than over it**, which is not a style choice: the
+/// line being typed is the one thing that must stay visible, and a box drawn on
+/// top of it hides the word the list is about. When there is no room below, it
+/// goes above for the same reason.
+///
+/// Every colour is a `Role`, and the only glyphs are the skin's own, so the
+/// ASCII skin and a terminal with no colour both draw something legible. The
+/// chosen row is marked by a styled cell rather than by colour alone, because
+/// colour alone is not a marker on a monochrome terminal.
+fn draw_popup(area: Rect, buf: &mut Buffer, v: &CodeView, popup: &Popup, skin: &Skin) {
+    let visible = popup.visible();
+    if visible.is_empty() || area.width < 12 {
+        return;
+    }
+    let rows = visible.len().min(POPUP_MAX_ROWS);
+    let want_h = rows as u16 + 2;
+    if want_h > area.height || area.height < 3 {
+        return;
+    }
+
+    // The widest row, capped so the popup never takes the whole pane: a list
+    // that covers the file is one that hides the answer it is about.
+    let width = visible
+        .iter()
+        .take(rows)
+        .map(|c| {
+            cols(&c.label)
+                + c.detail.as_deref().map(|d| cols(d) + 2).unwrap_or(0)
+                + if c.kind.is_empty() {
+                    0
+                } else {
+                    cols(c.kind) + 3
+                }
+        })
+        .max()
+        .unwrap_or(20)
+        .clamp(12, (area.width.saturating_sub(2)).max(12) as usize) as u16
+        + 2;
+
+    // Below the cursor's row when it fits, above when it does not.
+    let cursor_row = v
+        .open
+        .as_ref()
+        .and_then(|o| doc_geom(area, v).map(|g| (o.line, g)))
+        .map(|(line, g)| area.y + (line.saturating_sub(g.top)) as u16)
+        .unwrap_or(area.y);
+    let below = cursor_row.saturating_add(1);
+    let y = if below + want_h <= area.bottom() {
+        below
+    } else {
+        cursor_row.saturating_sub(want_h).max(area.y)
+    };
+    let x = area.x.min(area.right().saturating_sub(width));
+    let rect = Rect::new(x, y, width.min(area.width), want_h);
+
+    let inner = overlay(buf, rect, skin);
+
+    // Keep the chosen row on screen when the list is longer than the box.
+    let at = popup.at.min(visible.len().saturating_sub(1));
+    let first = at.saturating_sub(rows.saturating_sub(1));
+    for (row, item) in visible.iter().skip(first).take(rows).enumerate() {
+        let chosen = first + row == at;
+        let mut spans = vec![Span::styled(
+            // The pointer is a marker, not a colour: on a monochrome terminal
+            // colour alone says nothing about which row is chosen.
+            if chosen {
+                format!("{} ", skin.glyphs.bullet)
+            } else {
+                "  ".to_string()
+            },
+            skin.palette
+                .style(if chosen { Role::Accent } else { Role::Dim }),
+        )];
+        spans.push(Span::styled(
+            sanitise(&item.label),
+            skin.palette
+                .style(if chosen { Role::Accent } else { Role::Text }),
+        ));
+        if !item.kind.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", item.kind),
+                skin.palette.style(Role::Dim),
+            ));
+        }
+        if let Some(detail) = item.detail.as_deref() {
+            spans.push(Span::styled(
+                format!("  {}", sanitise(detail)),
+                skin.palette.style(Role::Dim),
+            ));
+        }
+        put(buf, inner, row as u16, Line::from(spans));
+    }
+}
+
+/// The places panel: references to a symbol, or the symbols in a file.
+///
+/// **On the right half of the document when there is room for one**, which is
+/// the one layout decision here worth an argument. The list is a set of
+/// destinations rather than an annotation on a line, so unlike the hover and
+/// the completion popup it has no line it must stay next to — and keeping the
+/// left half clear means the code stays readable while somebody arrows through
+/// the answers about it. On a narrow pane it takes the whole width, because
+/// half of a narrow pane is a column of ellipses.
+///
+/// The chosen row is a styled cell rather than a colour, the rule every list
+/// on this page follows: colour alone is not a marker on a monochrome
+/// terminal.
+fn draw_places(area: Rect, buf: &mut Buffer, places: &Places, skin: &Skin) {
+    if places.rows.is_empty() || area.width < 12 || area.height < 4 {
+        return;
+    }
+    let rows = places.rows.len().min(PLACES_MAX_ROWS).min(
+        // Two for the border, one for the header.
+        area.height.saturating_sub(3) as usize,
+    );
+    if rows == 0 {
+        return;
+    }
+    let width = if area.width >= 60 {
+        area.width / 2
+    } else {
+        area.width
+    };
+    let rect = Rect::new(
+        area.right().saturating_sub(width),
+        area.y,
+        width,
+        rows as u16 + 3,
+    );
+
+    let inner = overlay(buf, rect, skin);
+
+    let w = inner.width as usize;
+    // The header says what was asked and how many answers came back, because a
+    // list of twelve rows out of forty is a different fact from a list of
+    // twelve, and the panel is the only place that difference can be told.
+    let head = format!("{} ({})", sanitise(&places.about), places.rows.len());
+    put(
+        buf,
+        inner,
+        0,
+        Line::from(Span::styled(
+            fit(&head, w, skin.glyphs.ellipsis),
+            skin.palette.style(Role::Dim),
+        )),
+    );
+
+    let at = places.at.min(places.rows.len() - 1);
+    // No stored first row: with one selection and no wheel, "keep the chosen
+    // row on screen" is the whole scrolling rule, and a stored offset would be
+    // a second thing to keep in step with it.
+    let first = scroll_to_show(0, at, rows);
+    for (row, place) in places.rows.iter().enumerate().skip(first).take(rows) {
+        let chosen = row == at;
+        let text = fit(&sanitise(&place.label), w, skin.glyphs.ellipsis);
+        let style = if chosen {
+            skin.palette.chip(Role::Accent)
+        } else {
+            skin.palette.style(Role::Text)
+        };
+        put(
+            buf,
+            inner,
+            (row - first) as u16 + 1,
+            Line::from(Span::styled(pad(&text, w), style)),
+        );
+    }
 }
 
 fn draw_history(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
@@ -5649,6 +6535,402 @@ mod tests {
         );
     }
 
+    /// The colour a reader actually sees, taken off the painted buffer rather
+    /// than off `syntax_role`.
+    ///
+    /// **A test on the mapping alone would pass with the colour never
+    /// reaching a cell**, which is the shape of false receipt this project has
+    /// paid for before. So this paints the page and reads the styles back: the
+    /// comment is dim and the keyword is not, and the two are different
+    /// styles, which is the whole of the complaint that started this work.
+    #[test]
+    fn a_comment_and_the_code_beside_it_are_painted_differently() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["let x = 1; // why"]);
+        v.body_rows = 10;
+        v.apply_lsp(LspUpdate::Tokens {
+            path: "src/main.rs".into(),
+            items: vec![
+                Token {
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    kind: TokenKind::Keyword,
+                },
+                Token {
+                    line: 0,
+                    start: 11,
+                    end: 17,
+                    kind: TokenKind::Comment,
+                },
+            ],
+        });
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+
+        // The document's own row, found by its text rather than by a column
+        // this test computed: where the gutter ends is not this test's
+        // business, and the header carries a `/` of its own in the path, so a
+        // search over the whole pane would read the wrong cell and pass or
+        // fail for a reason that has nothing to do with syntax colour.
+        let rows = dump(&buf);
+        let y = rows
+            .iter()
+            .position(|r| r.contains("let x = 1;"))
+            .expect("the document line is drawn") as u16;
+        let cell = |glyph: &str| {
+            (0..area.width)
+                .map(|x| &buf[(x, y)])
+                .find(|c| c.symbol() == glyph)
+                .unwrap_or_else(|| panic!("no {glyph} on the document's line"))
+        };
+        let skin = skin();
+        let keyword = cell("l");
+        let comment = cell("/");
+        // A cell no token covers. The second copy of this test, deleted with
+        // this line moved into it, checked only that the three differ; this one
+        // checks the roles as well, so it subsumes it.
+        let plain = cell("x");
+        assert_eq!(
+            keyword.style().fg,
+            skin.palette.style(Role::Keyword).fg,
+            "the keyword is drawn in the keyword's colour"
+        );
+        assert_eq!(
+            comment.style().fg,
+            skin.palette.style(Role::Comment).fg,
+            "the comment is drawn in the comment's colour"
+        );
+        assert_ne!(
+            keyword.style().fg,
+            comment.style().fg,
+            "a comment the same colour as the code is the defect this fixes"
+        );
+        assert_ne!(
+            keyword.style().fg,
+            plain.style().fg,
+            "a character no token covers must not take the keyword's colour"
+        );
+        assert_ne!(comment.style().fg, plain.style().fg, "nor the comment's");
+        assert!(
+            comment
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM),
+            "and it is dim, which is the half that survives a colourless terminal"
+        );
+    }
+
+    fn places(rows: Vec<(&str, usize, usize)>) -> LspUpdate {
+        LspUpdate::Places {
+            path: "src/main.rs".into(),
+            about: "references to widget".into(),
+            rows: rows
+                .into_iter()
+                .map(|(rel, line, col)| Place {
+                    label: format!("{rel}:{}", line + 1),
+                    rel: rel.to_string(),
+                    line,
+                    col,
+                })
+                .collect(),
+        }
+    }
+
+    /// The two list keys reach the shell from the browser and from inside the
+    /// document, which is the whole reason they are function keys.
+    #[test]
+    fn f8_asks_where_a_symbol_is_used_and_f10_what_the_file_contains() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(8))),
+            CodeAction::References
+        );
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(10))), CodeAction::Symbols);
+
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(8))),
+            CodeAction::References,
+            "a letter would be text here; a function key still arrives"
+        );
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(10))), CodeAction::Symbols);
+    }
+
+    /// With nothing readable open they refuse in words, the rule `F5` and `F6`
+    /// already follow: a key that silently does nothing is a key people report.
+    #[test]
+    fn the_list_keys_refuse_in_words_when_there_is_no_file_to_ask_about() {
+        let mut v = sample();
+        for code in [KeyCode::F(8), KeyCode::F(10)] {
+            v.lsp.note = None;
+            assert_eq!(handle_key(&mut v, key(code)), CodeAction::FocusChanged);
+            assert!(
+                lsp_line(&v).is_some_and(|l| l.contains("open a text file first")),
+                "{code:?} said nothing"
+            );
+        }
+    }
+
+    /// An empty answer is an answer. It says so on the status row rather than
+    /// opening a panel with no rows in it, which would be a box saying nothing.
+    #[test]
+    fn no_results_is_a_sentence_rather_than_an_empty_panel() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        assert_eq!(v.apply_lsp(places(vec![])), None);
+        assert!(v.lsp.places.is_none(), "no panel opens");
+        let line = lsp_line(&v).expect("a sentence");
+        assert!(
+            line.contains("no results for references to widget"),
+            "{line}"
+        );
+    }
+
+    /// The panel owns the keyboard while it is up: the arrows move the
+    /// selection, Enter opens the chosen row, and anything else closes it
+    /// without reaching the buffer underneath.
+    #[test]
+    fn the_places_panel_moves_opens_and_closes() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        let before = v.open.as_ref().expect("open").lines.clone();
+
+        assert_eq!(
+            v.apply_lsp(places(vec![
+                ("src/main.rs", 0, 3),
+                ("src/term/code.rs", 41, 8),
+            ])),
+            None
+        );
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Down)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::Goto(Place {
+                label: "src/term/code.rs:42".into(),
+                rel: "src/term/code.rs".into(),
+                line: 41,
+                col: 8,
+            }),
+            "Enter opens the row the arrows landed on"
+        );
+        assert!(v.lsp.places.is_none(), "opening a row closes the panel");
+
+        // And a key that is not one of the three closes it without editing the
+        // line it was drawn over.
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Char('x'))),
+            CodeAction::FocusChanged
+        );
+        assert!(v.lsp.places.is_none());
+        assert_eq!(
+            v.open.as_ref().expect("open").lines,
+            before,
+            "the key did not reach the buffer"
+        );
+    }
+
+    /// **The paint and the keyboard agree about which overlay is on top.**
+    ///
+    /// Both can be set: press `F8`, then `F5` before the references answer
+    /// lands. `draw_body` draws the panel and not the hover, and `handle_key`
+    /// used to ask the hover first — so the arrows moved nothing, and the first
+    /// key silently closed a popup that was never on screen. This asserts the
+    /// two orders from the same state, so it fails whichever of them is
+    /// reversed.
+    #[test]
+    fn the_overlay_that_is_drawn_is_the_one_that_takes_the_keys() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![
+            ("src/main.rs", 0, 3),
+            ("src/term/code.rs", 41, 8),
+        ]));
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: Some(vec!["fn main()".into()]),
+        });
+        assert!(
+            v.lsp.places.is_some() && v.lsp.hover.is_some(),
+            "both are up"
+        );
+
+        // What the paint chose.
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        assert!(
+            rows.iter().any(|r| r.contains("references to widget (2)")),
+            "the panel is the overlay on screen: {rows:#?}"
+        );
+
+        // What the keyboard chose. Down moves the panel's selection; if the
+        // hover had taken the key the panel would be untouched and the hover
+        // scrolled or closed instead.
+        handle_key(&mut v, key(KeyCode::Down));
+        assert_eq!(
+            v.lsp.places.as_ref().map(|p| p.at),
+            Some(1),
+            "the arrow reached the panel that is on screen"
+        );
+        assert!(
+            v.lsp.hover.is_some(),
+            "and did not close the overlay nobody can see"
+        );
+    }
+
+    /// **An armed discard is answered before any overlay sees the key.**
+    ///
+    /// A places answer can land in the gap between arming the warning and the
+    /// key that answers it. With the panel above the warning, the panel ate the
+    /// cancelling key, the warning stayed armed with its notice on screen, and
+    /// the *next* `Esc` closed the page and threw the edits away — a
+    /// destructive action reached by a key somebody thought was closing a list.
+    #[test]
+    fn a_panel_cannot_swallow_the_key_that_cancels_a_discard() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["fn main() {}"]);
+        handle_key(&mut v, key(KeyCode::Char('x')));
+        assert!(v.dirty(), "there are edits to lose");
+        handle_key(&mut v, key(KeyCode::Esc));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Esc)),
+            CodeAction::FocusChanged,
+            "the second Esc arms the warning rather than closing the page"
+        );
+        assert!(v.armed.is_some(), "armed");
+
+        // The answer arrives while the warning waits.
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Char('q'))),
+            CodeAction::FocusChanged
+        );
+        assert!(
+            v.armed.is_none(),
+            "the warning was answered rather than left armed behind a panel"
+        );
+
+        // And so the panel's own Esc closes the panel, not the page.
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Esc)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.lsp.places.is_none(), "the panel closed");
+        assert!(v.dirty(), "and nothing was discarded");
+    }
+
+    /// The overlay's fill, which is the half of it that has no other witness.
+    ///
+    /// A border rendered over a painted document without clearing the cells
+    /// inside it leaves the file showing through the panel, which reads as
+    /// corruption rather than as an overlay. Three draw functions shared this
+    /// preamble and only one carried the argument for it.
+    #[test]
+    fn an_overlay_clears_the_document_out_from_under_itself() {
+        let mut v = sample();
+        // Several lines of one distinctive glyph, each wider than the pane: the
+        // panel's own rows must land over painted text, or the fill has nothing
+        // to clear and the test cannot fail.
+        let long = "Z".repeat(120);
+        let lines: Vec<&str> = (0..8).map(|_| long.as_str()).collect();
+        open_file(&mut v, "src/main.rs", &lines);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![("src/main.rs", 0, 3)]));
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        let panel = rows
+            .iter()
+            .find(|r| r.contains("references to widget"))
+            .expect("the panel header is drawn");
+        // Everything from the header text to the panel's right border. The
+        // document's `Z`s are to the *left* of the panel too, which is correct
+        // and is why this looks only inside it -- and the border itself is the
+        // last glyph on the row, which is why the first version of this test
+        // asked whether the row ended in a `Z` and could not fail.
+        let inside = &panel[panel.find("references").expect("the header")..];
+        assert!(
+            !inside.contains('Z'),
+            "the document is showing through the panel: {inside:?}"
+        );
+    }
+
+    /// A span that runs over several lines marks every one of them.
+    ///
+    /// Every diagnostic fixture on this page was one line high, so the
+    /// containment rule the gutter and the underline share could have been
+    /// `line == d.line` and nothing would have gone red. rust-analyzer spans
+    /// several lines routinely — an unclosed brace, a mismatched block.
+    #[test]
+    fn a_diagnostic_that_spans_lines_marks_every_line_it_covers() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {", "    x", "}"]);
+        v.body_rows = 10;
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![Diag {
+                line: 0,
+                end_line: 2,
+                start_col: 10,
+                end_col: 1,
+                severity: Severity::Error,
+                message: "this block is never closed".into(),
+            }],
+        );
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        for line in 0..3 {
+            assert_eq!(
+                gutter_mark(&buf, &v, area, line),
+                Severity::Error.mark().to_string(),
+                "line {line} of a three-line span is unmarked"
+            );
+        }
+        // And the underline reaches the middle line, which has no endpoint of
+        // its own: the span covers it whole.
+        assert!(covers(&v.lsp.diags[0], 1, 0), "the middle line is covered");
+    }
+
+    /// Drawn: the header says what was asked and how many came back, and the
+    /// chosen row is a styled cell rather than a colour, because colour alone
+    /// is not a marker on a monochrome terminal.
+    #[test]
+    fn the_places_panel_is_painted_with_its_count_and_a_marked_row() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        v.apply_lsp(places(vec![
+            ("src/main.rs", 0, 3),
+            ("src/term/code.rs", 41, 8),
+        ]));
+        let area = Rect::new(0, 0, 100, 24);
+        let (buf, _) = painted(&v, area);
+        let rows = dump(&buf);
+        assert!(
+            rows.iter().any(|r| r.contains("references to widget (2)")),
+            "the header names the ask and the count: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("src/term/code.rs:42")),
+            "every row is drawn: {rows:#?}"
+        );
+        let chosen = buf
+            .content()
+            .iter()
+            .any(|c| c.symbol() == "s" && c.style() == skin().palette.chip(Role::Accent));
+        assert!(chosen, "the chosen row is a styled cell, not a colour");
+    }
+
     /// The containment law, on this side of the seam: a definition outside the
     /// repository is named and nothing opens, because this page's Save writes
     /// inside the root and an editor over a file it cannot save is a trap.
@@ -5827,4 +7109,516 @@ mod tests {
     }
 
     // endregion: The LSP half
+
+    // -- the completion popup ------------------------------------------------
+
+    fn candidate(label: &str, filter: &str, insert: &str) -> Candidate {
+        Candidate {
+            label: label.to_string(),
+            filter: filter.to_string(),
+            insert: insert.to_string(),
+            replace: None,
+            kind: "method",
+            detail: None,
+        }
+    }
+
+    /// A file with the cursor mid-word, ready for a completion.
+    fn with_word(word: &str) -> CodeView {
+        let mut v = sample();
+        v.body_rows = 10;
+        // `editing_at` is the helper that opens a file *editable*: the two
+        // hashes agree, so nothing locks the buffer. Passing `None` for the
+        // disk hash marks it not-exact and read-only, which is C2's rule
+        // working and cost this fixture its first run.
+        editing_at(&mut v, "src/lib.rs", &[&format!("fn main() {{ {word}")]);
+        let o = v.open.as_mut().expect("open");
+        o.line = 0;
+        o.col = o.lines[0].chars().count();
+        v
+    }
+
+    /// **What the popup matches against is the filter, never the label.**
+    /// A server labels a method `push(…)` and filters it as `push`; matching
+    /// the label is why some editors stop finding anything after the bracket.
+    #[test]
+    fn the_popup_narrows_on_the_filter_text_and_not_the_label() {
+        let mut popup = Popup {
+            items: vec![
+                candidate("push(…)", "push", "push"),
+                candidate("pop(…)", "pop", "pop"),
+                candidate("clear(…)", "clear", "clear"),
+            ],
+            ..Popup::default()
+        };
+        assert_eq!(popup.visible().len(), 3);
+        popup.typed = "p".to_string();
+        assert_eq!(popup.visible().len(), 2, "p matches push and pop");
+        popup.typed = "pu".to_string();
+        assert_eq!(popup.visible().len(), 1);
+        assert_eq!(popup.chosen().map(|c| c.filter.as_str()), Some("push"));
+        // A bracket appears in every label and in no filter, so a popup
+        // matching labels would still show three here.
+        popup.typed = "(".to_string();
+        assert!(
+            popup.visible().is_empty(),
+            "the labels were matched instead of the filters"
+        );
+    }
+
+    /// A prefix beats a substring, and the server's own ranking is kept inside
+    /// each group rather than re-sorted: it knows which of two matches is more
+    /// likely and this does not.
+    #[test]
+    fn a_prefix_match_outranks_a_substring_and_the_server_order_survives() {
+        let popup = Popup {
+            items: vec![
+                candidate("a", "with_push", "with_push"),
+                candidate("b", "pushed", "pushed"),
+                candidate("c", "pushing", "pushing"),
+            ],
+            typed: "push".to_string(),
+            ..Popup::default()
+        };
+        let seen: Vec<&str> = popup.visible().iter().map(|c| c.filter.as_str()).collect();
+        assert_eq!(
+            seen,
+            vec!["pushed", "pushing", "with_push"],
+            "prefixes must come first, and the server's order kept within a group"
+        );
+    }
+
+    /// Accepting replaces the word under the cursor rather than appending to
+    /// it. Appending is the defect that turns `pu` plus `push` into `pupush`.
+    #[test]
+    fn accepting_replaces_the_word_under_the_cursor() {
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            ..Popup::default()
+        });
+        v.accept_completion();
+        assert_eq!(
+            v.open.as_ref().unwrap().lines[0],
+            "fn main() { push",
+            "the typed prefix was not replaced"
+        );
+        assert!(
+            v.lsp.popup.is_none(),
+            "the popup stayed open after accepting"
+        );
+        assert!(v.open.as_ref().unwrap().dirty);
+    }
+
+    /// A server-supplied range wins over the word rule, because the server is
+    /// the one that knows the language. Here it replaces more than an
+    /// identifier would.
+    ///
+    /// The origin is the cursor, which is the condition the range is good
+    /// under: see the test below for what happens when it is not.
+    #[test]
+    fn a_server_range_wins_over_the_word_before_the_cursor() {
+        let mut v = with_word("a.b");
+        let mut item = candidate("total", "total", "total");
+        // Columns 12..15 are `a.b`, which no identifier rule would take whole.
+        item.replace = Some((12, 15));
+        let at = (0, v.open.as_ref().expect("open").col);
+        v.lsp.popup = Some(Popup {
+            items: vec![item],
+            origin: at,
+            ..Popup::default()
+        });
+        v.accept_completion();
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { total");
+    }
+
+    /// **And it stops winning the moment the cursor leaves the position it was
+    /// computed at**, which is the common case rather than the corner: the list
+    /// narrows as somebody types and is not asked again, so by the time they
+    /// press Enter they are three letters past where the server answered.
+    ///
+    /// Certified against rust-analyzer 1.94.1: a completion after a dot comes
+    /// back with an *empty* replace range at the request position. Applying
+    /// that after three more letters inserts the candidate and leaves the three
+    /// behind, so `c.pus` accepted as `push` produced `c.pushpus`. The word
+    /// before the cursor is the honest range once the cursor has moved -- the
+    /// same fallback a server naming no range already gets.
+    #[test]
+    fn a_server_range_is_dropped_once_the_cursor_has_moved_past_it() {
+        let mut v = with_word("c.pus");
+        let mut item = candidate("push", "push", "push");
+        // What rust-analyzer actually sends: an empty range at the point the
+        // question was asked, which was three characters ago.
+        item.replace = Some((14, 14));
+        v.lsp.popup = Some(Popup {
+            items: vec![item],
+            // Asked just after the dot; the cursor is now at 17.
+            origin: (0, 14),
+            typed: "pus".to_string(),
+            ..Popup::default()
+        });
+        v.accept_completion();
+        assert_eq!(
+            v.open.as_ref().unwrap().lines[0],
+            "fn main() { c.push",
+            "the three letters already typed must be replaced, not kept"
+        );
+        assert_eq!(v.open.as_ref().unwrap().col, 18);
+    }
+
+    /// **Both spellings of the completion key reach the page, and the second
+    /// one did not for a fortnight.**
+    ///
+    /// `takes_key` admitted exactly one `Ctrl` chord, so the `Ctrl+space` arm
+    /// below it was unreachable and the key did nothing at all -- while the
+    /// help row, the module header and a commit message all named it. Relaxing
+    /// the predicate alone would have been worse: the blanket `Ctrl` arm in
+    /// `handle_key` would have *saved the file* when somebody asked for a
+    /// completion. So this asserts both halves.
+    #[test]
+    fn ctrl_space_asks_for_a_completion_and_does_not_save() {
+        let mut v = with_word("pu");
+        let chord = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert!(takes_key(&v, chord), "the chord never reached the page");
+        assert_eq!(
+            handle_key(&mut v, chord),
+            CodeAction::Complete,
+            "Ctrl+space must ask, not save"
+        );
+        // And the one chord that does save still does. The buffer has to be
+        // dirty for a save to be a write rather than a sentence.
+        v.open.as_mut().expect("open").dirty = true;
+        let save = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(matches!(handle_key(&mut v, save), CodeAction::Save(_)));
+    }
+
+    /// **Completion refuses outside the editor, because its popup has no exit
+    /// there.** `popup_key` is reached only from `edit_key`, so a list opened
+    /// from the tree or from a read-only document covered the code with
+    /// nothing able to dismiss it, and `Esc` closed the whole page instead.
+    #[test]
+    fn a_completion_asked_for_outside_the_editor_refuses_in_words() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}"]);
+        v.body_rows = 10;
+        assert!(!v.editing(), "the fixture must be a viewer, not an editor");
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(9))),
+            CodeAction::FocusChanged
+        );
+        assert!(
+            v.lsp.popup.is_none(),
+            "a popup opened with no way to close it"
+        );
+        let note = lsp_line(&v).expect("a sentence");
+        assert!(note.contains("press Enter to edit"), "{note}");
+
+        // And once the document is being edited it asks, as it always did.
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.editing());
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(9))), CodeAction::Complete);
+    }
+
+    /// **Opening a file drops every answer about the last one.** The popup is
+    /// the one that could do damage rather than merely mislead: it inserts into
+    /// the buffer, so a list left standing across a file switch would put the
+    /// old file's candidate into the new file's text.
+    #[test]
+    fn opening_a_file_drops_the_answers_about_the_previous_one() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push", "push", "push")],
+            ..Popup::default()
+        });
+        v.lsp.places = Some(Places {
+            about: "references to widget".into(),
+            rows: vec![Place {
+                label: "src/lib.rs:1".into(),
+                rel: "src/lib.rs".into(),
+                line: 0,
+                col: 0,
+            }],
+            at: 0,
+        });
+        v.lsp.hover = Some(HoverPopup {
+            lines: vec!["fn push".into()],
+            scroll: 0,
+        });
+        v.lsp.tokens = vec![Token {
+            line: 0,
+            start: 0,
+            end: 2,
+            kind: TokenKind::Keyword,
+        }];
+        v.lsp.tokens_for = Some("src/lib.rs".into());
+
+        open_file(&mut v, "src/other.rs", &["fn other() {}"]);
+
+        assert!(
+            v.lsp.popup.is_none(),
+            "a completion for the old file survived"
+        );
+        assert!(
+            v.lsp.places.is_none(),
+            "a places panel about the old file survived"
+        );
+        assert!(v.lsp.hover.is_none(), "a hover about the old file survived");
+        assert!(v.lsp.tokens.is_empty(), "the old file's colours survived");
+        assert_eq!(v.lsp.tokens_for, None);
+    }
+
+    /// **The popup owns six keys and no more.** One that swallowed Backspace
+    /// would strand somebody mid-word; one that swallowed a letter would stop
+    /// them typing. Both must reach the editor.
+    #[test]
+    fn the_popup_takes_its_own_keys_and_lets_the_editor_keep_the_rest() {
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![
+                candidate("push(…)", "push", "push"),
+                candidate("pull(…)", "pull", "pull"),
+            ],
+            typed: "pu".to_string(),
+            ..Popup::default()
+        });
+        // Down moves the selection and does not reach the buffer.
+        let before = v.open.as_ref().unwrap().lines[0].clone();
+        handle_key(&mut v, key(KeyCode::Down));
+        assert_eq!(v.lsp.popup.as_ref().unwrap().at, 1);
+        assert_eq!(
+            v.open.as_ref().unwrap().lines[0],
+            before,
+            "Down typed a character"
+        );
+
+        // A letter reaches the buffer *and* narrows the list.
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { pus");
+        assert_eq!(
+            v.lsp.popup.as_ref().map(|p| p.typed.as_str()),
+            Some("pus"),
+            "typing did not narrow the open popup"
+        );
+        assert_eq!(
+            v.lsp.popup.as_ref().unwrap().visible().len(),
+            1,
+            "the list did not narrow"
+        );
+
+        // Backspace reaches the buffer, which is the key that proves the popup
+        // is a layer and not a modal.
+        handle_key(&mut v, key(KeyCode::Backspace));
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { pu");
+
+        // Esc closes it and leaves the buffer alone.
+        handle_key(&mut v, key(KeyCode::Esc));
+        assert!(v.lsp.popup.is_none());
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { pu");
+    }
+
+    /// Typing past every match closes the popup rather than leaving a list of
+    /// items that do not contain what is on screen.
+    #[test]
+    fn typing_past_every_match_closes_the_popup() {
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Char('z')));
+        assert!(
+            v.lsp.popup.is_none(),
+            "a popup with nothing matching stayed open"
+        );
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { puz");
+    }
+
+    /// **Moving the selection changes what is inserted**, which sounds obvious
+    /// and was untested: every other case here chooses row zero, so a `chosen`
+    /// that always returned the first item passed the whole file. Found by
+    /// mutating it and watching nothing go red.
+    #[test]
+    fn the_selected_row_is_the_one_that_gets_inserted() {
+        let mut v = with_word("p");
+        v.lsp.popup = Some(Popup {
+            items: vec![
+                candidate("push(…)", "push", "push"),
+                candidate("pop(…)", "pop", "pop"),
+            ],
+            typed: "p".to_string(),
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Down));
+        handle_key(&mut v, key(KeyCode::Enter));
+        assert_eq!(
+            v.open.as_ref().unwrap().lines[0],
+            "fn main() { pop",
+            "Enter inserted the first row rather than the selected one"
+        );
+    }
+
+    /// Accepting when nothing matches inserts nothing. Inserting the first item
+    /// of a list the person has typed past is how an editor writes something
+    /// nobody asked for.
+    #[test]
+    fn accepting_with_no_match_inserts_nothing() {
+        let mut v = with_word("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "zzz".to_string(),
+            ..Popup::default()
+        });
+        v.accept_completion();
+        assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { pu");
+        assert!(v.lsp.popup.is_none());
+    }
+
+    // -- opening by itself ---------------------------------------------------
+
+    /// A view that has been told what the server's trigger characters are, the
+    /// way the bridge tells it after a handshake.
+    fn with_triggers(word: &str) -> CodeView {
+        let mut v = with_word(word);
+        v.apply_lsp(LspUpdate::Triggers {
+            completion: vec![".".to_string(), ":".to_string()],
+            signature: vec!["(".to_string()],
+        });
+        v
+    }
+
+    /// **A trigger character opens a list immediately**, with nothing typed,
+    /// because after a dot the useful answer is the whole set of members.
+    #[test]
+    fn a_trigger_character_asks_at_once() {
+        let mut v = with_triggers("c");
+        handle_key(&mut v, key(KeyCode::Char('.')));
+        assert!(
+            v.lsp.want_completion,
+            "a dot did not ask, so the list never opens by itself"
+        );
+    }
+
+    /// An identifier opens one only once there is enough to narrow it. A list
+    /// of everything in scope after one letter is a list nobody reads.
+    #[test]
+    fn an_identifier_asks_only_once_it_is_long_enough_to_narrow() {
+        let mut v = with_triggers("");
+        handle_key(&mut v, key(KeyCode::Char('p')));
+        assert!(!v.lsp.want_completion, "one letter is not enough");
+        handle_key(&mut v, key(KeyCode::Char('u')));
+        assert!(!v.lsp.want_completion, "two letters is not enough");
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            v.lsp.want_completion,
+            "the list must open on the third letter, where every editor puts it"
+        );
+    }
+
+    /// Nothing asks for a character that starts no word and triggers nothing:
+    /// a space, a bracket the server did not name.
+    #[test]
+    fn an_ordinary_character_asks_for_nothing() {
+        let mut v = with_triggers("push");
+        handle_key(&mut v, key(KeyCode::Char(' ')));
+        assert!(!v.lsp.want_completion);
+        handle_key(&mut v, key(KeyCode::Char(';')));
+        assert!(!v.lsp.want_completion);
+    }
+
+    /// **Typing into an open popup narrows it rather than asking again**, which
+    /// is what keeps this from being one request per keystroke. The exception
+    /// is a list the server truncated and asked to be re-queried.
+    #[test]
+    fn typing_into_an_open_list_narrows_it_unless_the_server_wants_re_asking() {
+        let mut v = with_triggers("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            !v.lsp.want_completion,
+            "an open list was re-asked instead of narrowed"
+        );
+
+        // The same keystroke against a list the server marked incomplete.
+        let mut v = with_triggers("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            incomplete: true,
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            v.lsp.want_completion,
+            "a truncated list must be re-asked, or it only ever narrows"
+        );
+    }
+
+    /// A server that names no trigger characters gets no guesses. Emma asks
+    /// where the language says to ask, and nowhere else.
+    #[test]
+    fn with_no_triggers_named_a_dot_asks_for_nothing() {
+        let mut v = with_word("c");
+        handle_key(&mut v, key(KeyCode::Char('.')));
+        assert!(
+            !v.lsp.want_completion,
+            "a dot was hard-coded rather than read from the server"
+        );
+    }
+
+    // -- syntax colour -------------------------------------------------------
+
+    /// Tokens about another file are not painted over this one. A stale set is
+    /// dropped rather than drawn, which is the same rule the diagnostics follow.
+    #[test]
+    fn tokens_for_another_file_are_not_painted_over_this_one() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = sample();
+        v.body_rows = 10;
+        open_file(&mut v, "src/lib.rs", &["let x = 1; // why"]);
+        v.apply_lsp(LspUpdate::Tokens {
+            path: "src/other.rs".to_string(),
+            items: vec![Token {
+                line: 0,
+                start: 0,
+                end: 3,
+                kind: TokenKind::Comment,
+            }],
+        });
+        assert!(
+            v.lsp.tokens.is_empty(),
+            "a token set about a different file was kept"
+        );
+
+        // **And the painter refuses one too**, which `apply_lsp` above makes
+        // unreachable through the normal path. Set directly, because a guard
+        // nothing can reach is a guard nothing tests: mutating the painter's
+        // check passed the whole file until this half existed.
+        v.lsp.tokens_for = Some("src/other.rs".to_string());
+        v.lsp.tokens = vec![Token {
+            line: 0,
+            start: 0,
+            end: 3,
+            kind: TokenKind::Comment,
+        }];
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &skin());
+        let g = doc_geom(area, &v).expect("drawn");
+        let first = buf[(g.area.x + g.gutter, g.area.y)].style().fg;
+        let plain = buf[(g.area.x + g.gutter + 4, g.area.y)].style().fg;
+        assert_eq!(
+            first, plain,
+            "tokens belonging to another file were painted over this one"
+        );
+    }
 }

@@ -98,9 +98,9 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <p>
     The write is confined to the tool's own bookkeeping file, and it is the write
     a model performs several times per goal. The argument on the list quotes the
-    module's own rule back at itself: a prompt the user cannot evaluate is worse
+    module's own rule back at itself: a prompt you cannot evaluate is worse
     than no prompt, and "TaskUpdate wants to tick a checkbox, allow?" fifteen
-    times in one goal is the prompt that teaches somebody to hold down
+    times in one goal is the prompt that teaches you to hold down
     <code>y</code>, including through the <code>Bash</code> call that follows it.
   </p>
   <span class="src">crates/emma/src/approval.rs — EXEMPT, doc comment</span>
@@ -239,9 +239,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       <!-- /diagram -->
     </div>
     <figcaption>
-      Drawn from <code>Approvals::decide</code> and <code>EXEMPT</code>. The
-      dashed line is not a component; it marks the place item 14 proposes to put
-      one.
+      Drawn from <code>Approvals::decide</code> and <code>EXEMPT</code>.
     </figcaption>
   </figure>
 

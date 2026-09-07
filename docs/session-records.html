@@ -437,10 +437,13 @@ self.s.log.append(
   <p>
     The block rather than the rendered string, because the string alone cannot be
     turned back into a message. The block carries the <code>tool_use_id</code> that
-    pairs it with its call, and <code>is_error</code> when it failed. The content
-    is one JSON string deeper than it would otherwise be. That is the price of
-    the record being sufficient rather than merely readable, and it is not stored
-    twice. A tool's output is the largest thing in the file.
+    pairs it with its call, and <code>is_error</code> when it failed.
+  </p>
+
+  <p>
+    You pay for that with one extra level of JSON string nesting around the
+    content. Nothing is stored twice, which matters because a tool's output is
+    the largest thing in the file.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::log_result_block</code></span>
 
@@ -544,11 +547,14 @@ pub fn subagent(&amp;self, sub_id: &amp;str, parent_turn_id: &amp;str, agent: &a
 }</code></pre>
 
   <p>
-    Same <code>Arc&lt;Mutex&lt;Option&lt;File&gt;&gt;&gt;</code>, so both runs
-    write to one file through one lock and the records interleave in real time
-    rather than being buffered and appended at the end. What separates them is
-    the prefix on the <code>kind</code> and the three stamped fields on every
-    payload. A delegated run therefore writes <code>sub.goal</code>,
+    The same handle behind the same mutex, so both runs write to one file
+    through one lock and the records interleave in real time rather than being
+    buffered and appended at the end. What separates them is the prefix on the
+    <code>kind</code> and the three stamped fields on every payload.
+  </p>
+
+  <p>
+    A delegated run therefore writes <code>sub.goal</code>,
     <code>sub.model_call</code>, <code>sub.assistant</code>,
     <code>sub.tool_call</code>, <code>sub.tool_result</code>,
     <code>sub.goal_finished</code> and so on for every kind its loop reaches,
@@ -680,14 +686,20 @@ tap: Option&lt;Records&gt;,</code></pre>
     Addressing reuses ids this file already carries rather than correlating
     anything new. The root node is the session's own goal, addressed by the
     session id, and it is implicit: nothing spawns it, so nothing writes a
-    <code>node_spawn</code> for it and its records are the un-prefixed ones. A
-    nested node is one delegation, addressed by the <code>sub_id</code> that
+    <code>node_spawn</code> for it and its records are the un-prefixed ones.
+  </p>
+
+  <p>
+    A nested node is one delegation, addressed by the <code>sub_id</code> that
     <code>SessionLog::subagent</code> stamps onto every record that run writes,
     built as <code>sub-&lt;parent turn id&gt;-&lt;n&gt;</code>. Delegation
     cannot nest today, because the child registry is built without the
     <code>Delegate</code> tool at all, so every <code>parent_node_id</code>
     written is the root. The field is written anyway rather than implied, so the
     day nesting becomes possible the reader needs no change.
+  </p>
+
+  <p>
     <span class="chip unv">unverified</span> Whether anything reads these
     records was not checked here. The two terminal views that would draw them,
     <code>term/inspect.rs</code> and <code>term/rungraph.rs</code>, render from
@@ -707,19 +719,24 @@ tap: Option&lt;Records&gt;,</code></pre>
     derivation over the records described on this page. It adds no record and
     decides nothing: nothing in it starts a run, ends one, or asks the model
     anything, and every number comes off the same session JSONL that
-    <code>emma agents</code> counts and <code>--resume</code> folds. That is
-    still true of <em>this</em> module, and the sentence that used to follow it
-    is not. It said the harness the fork's mocks draw does not exist here.
+    <code>emma agents</code> counts and <code>--resume</code> folds.
+  </p>
+
+  <p>
+    The sentence that used to follow that one said the harness the fork's mocks
+    draw does not exist here, and it is out of date.
     <a href="terminal-runctl.html"><code>runctl</code></a> landed on 2026-09-06
-    and is exactly the acting half: pause, resume, cancel, archive, delete and
-    starting a run, over the pid a session id already carries. What is still
-    absent is the <em>scheduler</em>, and that distinction is the whole of the
-    module's argument: there is no worker pool, no task queue and no DAG, so
-    <code>runs</code> returns goals in a session and the delegations inside
-    them, and a card the log cannot feed stays empty. No key reaches
-    <code>runctl</code> yet either, so nothing has written a
-    <code>harness_control</code> record outside a test. Nearly
-    every field is an <code>Option</code> carrying the reason it is optional.
+    as the acting half: pause, resume, cancel, archive, delete and starting a
+    run, over the pid a session id already carries.
+  </p>
+
+  <p>
+    What is still absent is the <em>scheduler</em>. There is no worker pool, no
+    task queue and no DAG, so <code>runs</code> returns goals in a session and
+    the delegations inside them, and a card the log cannot feed stays empty. No
+    key reaches <code>runctl</code> yet either, so nothing has written a
+    <code>harness_control</code> record outside a test. Nearly every field is an
+    <code>Option</code> carrying the reason it is optional.
     <span class="chip cert">certified</span>:
     <code>grep -c "Option&lt;" crates/emma/src/harness_state/mod.rs</code>
     is non-zero across the struct definitions, and the module contains no
@@ -744,8 +761,11 @@ tap: Option&lt;Records&gt;,</code></pre>
     torn tail keyed on the trailing byte rather than on the line's position,
     which is what a crash mid-write leaves and is not damage. The fork's counter
     had no such notion, so every live session being written to at the moment of
-    the read would have reported one damaged line. The cost is stated in the
-    module rather than hidden: <code>read_reporting</code> also prints to
+    the read would have reported one damaged line.
+  </p>
+
+  <p>
+    The module states the cost. <code>read_reporting</code> also prints to
     stderr, which under the full-screen frame is not somewhere a person is
     looking, and a page polling a damaged file calls it again on every poll.
     Nothing in <code>harness_state</code> can fix that, because the print is in

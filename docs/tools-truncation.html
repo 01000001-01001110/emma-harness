@@ -186,8 +186,8 @@
 <h2 id="once">The note is said once, and it used to be said twice</h2>
 
 <p>
-  The rule &mdash; name the limit, name the loss, name the remedy &mdash; is
-  unchanged. What changed on 2026-09-06 is that it is said <strong>once</strong>.
+  The rule is unchanged: name the limit, name the loss, name the remedy.
+  What changed on 2026-09-06 is that it is said <strong>once</strong>.
   <code>tools/fs</code> writes <code>[truncated: reason]</code> into the content
   <em>and</em> sets <code>truncated_because(reason)</code>, and the runtime used
   to append its note unconditionally, so the same sentence arrived at the model
@@ -203,7 +203,7 @@
   contain that string would otherwise suppress a note it never carried.
   Trailing whitespace is ignored on both sides, since the reader ends its line
   with a newline and the runtime's note begins with one.
-  <span class="chip test">tested</span> &mdash;
+  <span class="chip test">tested</span>:
   <code>a_truncated_result_says_so_once_rather_than_twice</code> and
   <code>a_tool_that_only_sets_the_flag_still_gets_the_note</code> pin both
   halves, so removing the check turns the first red and inverting it turns the
@@ -249,10 +249,9 @@ returns the rest]</code></pre>
 
 <p>
   When more than one cap fires they join with <code>; also </code> and stay
-  separate clauses. Merging them is how a reader concludes the pattern was too
-  broad when it was the traversal that gave up, or raises
-  <code>max_chars</code>, sees the prose come back, and never learns the link
-  list is still short.
+  separate clauses. Merge them and you conclude the pattern was too broad when
+  it was the traversal that gave up, or you raise <code>max_chars</code>, see
+  the prose come back, and never learn the link list is still short.
 </p>
 
 <p>
@@ -303,8 +302,8 @@ returns the rest]</code></pre>
 <p>
   Two rows to compare. Exactly two of these caps can
   be raised by an argument, <code>max_chars</code> and <code>max_links</code>,
-  and both belong to the web tools. That is not a policy, it is what the
-  <code>WebFetch</code> defect taught: the cap that needs
+  and both belong to the web tools. That came out of the <code>WebFetch</code>
+  defect rather than from a policy: the cap that needs
   a knob is the one where the dropped thing <em>was</em> the answer, and on a
   hub page the links are the content. On a glob matching sixty-four thousand
   paths, a bigger number produces a sixty-times larger useless answer.

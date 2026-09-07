@@ -70,7 +70,7 @@
 
   <p class="lede">
     Three things reach into the loop from outside it: a test replacing the
-    network, a signal handler ending a call, and a user changing model
+    network, a signal handler ending a call, and you changing model
     mid-session. All three are handled by the same arrangement, which is that
     <code>Setup</code> holds interfaces rather than concrete types.
   </p>
@@ -195,7 +195,7 @@ pub struct Fake {
   <span class="src">crates/emma/tests/support/mod.rs — <code>Fake::transcript</code>, <code>Fake::calls</code></span>
 
   <p>
-    What it buys, concretely: 22 tests covering the failure-is-an-observation
+    Concretely: 22 tests covering the failure-is-an-observation
     property, both halves of the memo, both budget shapes, every ending on the
     ladder, the approval ordering, and the round trip through the session file,
     all running with no network, no API key and no terminal.
@@ -341,11 +341,10 @@ impl Interrupt {
     that promised it interrupts a goal. <code>reset</code> is the reversal, and
     <code>starting_goal</code> is the rule that uses it: an interactive goal
     starts un-interrupted, a <code>-p</code> run does not. A one-shot run has
-    exactly one goal, so a press before it starts is the person cancelling what
-    they just typed, and discarding it would run the thing they had just asked
-    not to run. Interactively the same press is a stray keystroke at an idle
-    prompt. A second Ctrl-C during a goal is the process's own handling, not
-    this type.
+    exactly one goal, so a press before it starts is you cancelling what you
+    just typed, and discarding it would run the thing you had just asked not to
+    run. Interactively the same press is a stray keystroke at an idle prompt. A
+    second Ctrl-C during a goal is the process's own handling, not this type.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>an_interrupt_can_be_cleared_so_the_next_goal_starts_clean</code>
@@ -366,9 +365,9 @@ impl Interrupt {
   </p>
 
   <p>
-    That <code>main</code> calls <code>starting_goal</code> is unchecked —
-    deleting the call leaves the workspace green — listed under
-    <a href="roadmap.html#hazards">named hazards</a> rather than described here.
+    That <code>main</code> calls <code>starting_goal</code> is unchecked.
+    Deleting the call leaves the workspace green. It is listed under
+    <a href="roadmap.html#hazards">named hazards</a> and not described here.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Interrupt::install</code>, <code>Interrupt::reset</code>, <code>Interrupt::starting_goal</code>; crates/emma/src/main.rs</span>
 
@@ -499,7 +498,7 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
 
   <p>
     Four guards. Only after a change, otherwise an ordinary malformed request
-    costs somebody their tool traffic. Only on a message naming a signature or
+    costs you your tool traffic. Only on a message naming a signature or
     a thinking block. Both were confirmed by mutation, per the function's own
     doc: remove either and a test goes red. The third guard, the
     <code>is_model_bound</code> scan, is documented as redundant and kept: what
@@ -517,7 +516,7 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
 
   <p>
     The wording guard used to fail in silence: a bare
-    <code>return false;</code>. That was the fragile edge left unlit. The
+    <code>return false;</code>. The
     recovery keys on the provider's prose because no structured code
     distinguishes the stale-signature case from any other bad request, so a
     wording change upstream disables it without disabling anything that
@@ -530,7 +529,7 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/commands.rs">crates/emma/tests/commands.rs</a>
     <code>an_ordinary_bad_request_is_still_reported_rather_than_compacted_away</code>
     in <code>tests/commands.rs</code> asserts both that nothing is summarised
-    and that the near-miss is said out loud. One honest wart: the warning
+    and that the near-miss is said out loud. One wart: the warning
     string in the source is a single long literal with runs of spaces embedded
     where line continuations were meant to go, so what prints carries those
     gaps. The quote above reproduces it as it is.

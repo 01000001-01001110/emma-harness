@@ -367,12 +367,11 @@ match self
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
 
-  <h2 id="invoke">Four ways the call itself goes wrong, two of them newer than this page's first draft</h2>
+  <h2 id="invoke">Four ways the call itself goes wrong, two of them added late</h2>
 
   <p>
-    This section used to be titled "Two errors", and the match below had
-    exactly two error arms. Two failure classes existed that neither arm
-    caught, and both ended more than the call. A panicking tool unwound
+    The match below had exactly two error arms for a long time, and two failure
+    classes escaped both. Each ended more than the call. A panicking tool unwound
     straight through the loop, past the session log and the budget accounting,
     and took the run with it. That was the one failure class that did not reach
     the model as an observation, on a tool surface where several crates parse

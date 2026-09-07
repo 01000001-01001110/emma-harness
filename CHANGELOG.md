@@ -28,6 +28,44 @@ out for themselves.
 
 ## Unreleased
 
+- **Nine more themes ship in `.emma/themes/`, so `/theme` now offers eleven
+  files plus the built-in `emma`.** `cyberpunk`, `noir`, `blue`, `green`, `red`
+  and `colorblind-dark` are for a dark terminal; `white`, `gray` and
+  `colorblind-light` are for a light one, which is a case Emma had only one
+  answer for before. Each sets all thirteen settable roles — including the six
+  that colour source on the Code page, so opening a file no longer drops back to
+  the built-in's colours — and both pairs, and each names the background it was
+  designed against in its `about`.
+
+  Every palette was measured rather than eyeballed: WCAG contrast of all twelve
+  foreground roles against the theme's own `ground`, and CIELAB separation of
+  the six source roles from each other, re-run under simulated protanopia,
+  deuteranopia and tritanopia. The `colorblind-light` and `colorblind-dark` pair
+  are the two that are *held* to those numbers: their six source roles and their
+  `ok`/`err`/`warn` triple stay at least dE*ab 26 and 25 apart respectively under
+  normal vision and all three simulations, so "passed" and "failed" cannot come
+  out the same colour. In every theme `comment` is the quietest thing on screen
+  and is the one role allowed below 4.5:1; nothing is below 3:1.
+
+  Nobody has looked at any of these on a real terminal — the numbers come from
+  the hex values, and a cell buffer is not a console.
+
+- **A language server can be declared in `settings.json`, without a new
+  build.** A `servers` map inside the `lsp` block takes a key, the file
+  extensions it answers for, and the command to run; the entry becomes a
+  language like any of the seven built in, so it gets the same discovery, the
+  same refusals and the same tools. A key that names a built-in replaces it; a
+  new key is added after them, so a declaration cannot quietly take `.rs` away
+  from rust-analyzer. `command` is one program or one path and never a command
+  line, with `args` separate. A misspelled field is refused with the list of
+  fields that exist rather than ignored, and a refused entry does not take the
+  others with it. Because Emma cannot promise a server it did not choose stays
+  off the network, a declared one is never on by default: its key has to appear
+  in `enabled` too, every answer carries a caveat saying Emma has never driven
+  it, and every run prints the servers it may spawn and the commands they
+  resolve to. Personal settings only, so a cloned repository cannot declare a
+  program for Emma to run.
+
 - **The sidebar's SESSIONS list is a control, not a label.** Arrows walk it,
   Enter resumes the highlighted session, and a click on a row does the same.
   Both produce `/resume <id>`, a command you could have typed, rather than
@@ -54,12 +92,39 @@ out for themselves.
   server: a busy or dead one means no decorations, never a pause. A run
   without the bridge says so rather than reporting that nothing was found.
 
+- **Completion, on `Ctrl+space` or `F9`, and by itself as you type.** A list
+  opens on a character the server calls a trigger, or once a word is three
+  letters long; `Tab` and `Enter` both accept and every other key falls
+  through to the editor. A signature line under the document names the
+  argument the cursor is in.
+
+- **Code is coloured by the server that type-checked it.** Comments, keywords,
+  strings, numbers, types and functions each have a theme role, so a theme can
+  set them and one that names none of them keeps the built-in six. There is no
+  grammar here and no guess: with no server the file is drawn as plain text.
+
+- **`F8` lists where a symbol is used and `F10` lists what the file
+  contains.** Both open one panel on the right of the document. Arrows move
+  the selection, `Enter` opens the chosen place, and any other key closes it.
+  A use outside the repository is not offered, the rule the definition jump
+  already follows, and an empty answer is a sentence on the status row rather
+  than an empty box.
+
 - **The Code page has a chat strip.** `Tab` reaches it, and a question typed
   there goes down the same channel a typed line takes, so a running goal is
   the steering queue's answer and not the page's. The question carries which
   file it is about and which lines are on screen, and says so when the buffer
   has unsaved edits or when the read had to replace bytes. A file that is not
   open, or that could not be read, is refused in words.
+
+- **Two themes ship**, `daylight` (for a light terminal) and `nocturne` (a
+  cool dark alternative to the built-in), under `.emma/themes/`. The Theme
+  row on the Settings screen only ever cycles what `~/.emma/themes/*.json`
+  holds, so a fresh install with an empty themes directory had exactly one
+  theme to offer and the row cycled it onto itself while reporting a write
+  that took effect — copy either file (or a theme of your own) into
+  `~/.emma/themes/` to give the row something to step to. A theme selects on
+  the next start, not this one; only Accent repaints live.
 
 - **The Settings screen writes back, card by card.** Appearance, sampling,
   the memory policy, the keybinding preset and every tool's rule now persist,

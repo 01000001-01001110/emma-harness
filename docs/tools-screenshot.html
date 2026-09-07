@@ -87,8 +87,8 @@
 <p class="lede">
   <code>Screenshot</code> captures the primary display, bounds the image so a
   capture is not a megabyte of base64, and hands the bytes to the model on the
-  wire the running provider actually has. Three wires, not one, and the
-  difference is not cosmetic: only Anthropic's format can say <em>this picture
+  wire the running provider actually has. There are three of those wires, and
+  the difference matters: only Anthropic's format can say <em>this picture
   belongs to that tool result</em>.
 </p>
 
@@ -129,9 +129,8 @@
   so the backend is in-process instead: <code>BitBlt</code>,
   <code>StretchBlt</code> and GDI+.
   <span class="chip cert">certified</span> reproduced and bisected on Windows 11
-  in the port report. This is worth writing down because it is the kind of
-  finding that gets re-proposed by the next person who reads the recommendation
-  it overturned.
+  in the port report. It is recorded here because the next person to read the
+  recommendation it overturned will otherwise propose it again.
 </p>
 
 <p>
@@ -164,7 +163,7 @@
 </p>
 
 <p>
-  That is the honest half of a real trade. Replay depends on a file outside the
+  That is one half of a real trade. Replay depends on a file outside the
   log, and when the dependency is not met the transcript says so rather than
   quietly becoming a text-only conversation, which a model reading it would have
   no way to detect. Compaction, shedding and pruning all drop a result's images

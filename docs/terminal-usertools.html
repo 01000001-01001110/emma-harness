@@ -93,8 +93,8 @@
     pretending to launch: Search, the three
     <a href="terminal-pages.html">tool pages</a>, and Data Explorer, which is
     listed, marked unavailable, and has had no page since 2026-08-27. Three
-    rules carry the design; breaking any of them fails silently. The sharpest took twenty-two green
-    tests and a canary in the wrong stream to find.
+    rules carry the design, and breaking any of them fails silently. One of them
+    took twenty-two green tests and a canary in the wrong stream to find.
   </p>
 
   <h2 id="catalogue">Eight entries, always all eight</h2>
@@ -123,9 +123,9 @@
     pages in the frame now; see <a href="terminal-pages.html">the tool
     pages</a>. The Data Explorer became a page the same way and then lost that
     page too, on 2026-08-27, so it is the one row on this table that neither
-    launches a program nor opens a page. The launches
-    worked as built; the owner ruled on 2026-08-23 that they should be pages,
-    which is a different thing from their having been wrong.
+    launches a program nor opens a page. The launches worked as built. The owner
+    ruled on 2026-08-23 that they should be pages, which is a different thing
+    from their having been wrong.
   </p>
 
   <p>
@@ -153,10 +153,9 @@
     <code>the_catalogue_lists_all_eight_tools_with_their_fixed_keys</code>, whose
     assertion has been through all three states and carries the history: it
     first claimed both in-app tools were available <em>because their keys are
-    live in the frame</em>. That assertion, not the behaviour, held the defect
-    in place until it was inverted with a note saying
-    the day a Memory page existed it should be flipped back, and was flipped back
-    on the day that happened.
+    live in the frame</em>. The assertion was what held the defect in place,
+    until it was inverted with a note saying the day a Memory page existed it
+    should be flipped back. It was flipped back on the day that happened.
   </p>
 
   <p>
@@ -222,8 +221,7 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
   </p>
 
   <p>
-    The test fixture's own helper carries the seam's limit, and it is
-    the kind of thing usually left undiscovered:
+    The test fixture's own helper carries the seam's limit:
   </p>
 
   <p class="faint">crates/emma/src/usertools.rs &middot; the test helper <code>host</code></p>
@@ -244,8 +242,8 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
 
   <p>
     The interactive frame owns the alternate screen, so a child process that
-    writes to that console wrecks the display. Unlike a dead key, the user
-    cannot tell what happened. On Windows, <strong>every spawn shape
+    writes to that console wrecks the display. Unlike a dead key, you cannot
+    tell what happened. On Windows, <strong>every spawn shape
     <code>std::process</code> can express fails that requirement</strong>, and
     each was refuted by measurement rather than by review.
   </p>
@@ -451,8 +449,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     that does not resolve produces an error naming it, never a fall-through to a
     probe, because <em>&ldquo;a substitution looks identical to success right up
     until the wrong program opens.&rdquo;</em> The extra clause for a value with
-    whitespace in it exists so the rule the user broke is named rather than
-    merely reported.
+    whitespace in it exists so the rule you broke is named rather than merely
+    reported.
   </p>
 
   <p>
@@ -582,9 +580,14 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>usertools.rs</code> was 1,736 lines when this page was written and is
-    1,649 now: the two page tools took four functions and three tests out with
-    them. Above the outer <code>#[cfg(test)]</code> boundary it declares 45
+    <code>usertools.rs</code> was 1,736 lines when this page was written, fell
+    to 1,649 when the two page tools took four functions and three tests out
+    with them, and is
+    <span class="chip unv">unverified</span> <strong>1,733 lines</strong> now
+    (<code>wc -l</code>, 2026-09-06), back above the count this
+    paragraph once fell to, and the function list below was not re-walked
+    against whatever grew it back. Above the outer <code>#[cfg(test)]</code>
+    boundary it declares 45
     function items, counting the <code>Machine</code> trait's six methods
     separately from <code>RealMachine</code>'s six implementations and the
     <code>cfg</code>-duplicated <code>candidates</code>,

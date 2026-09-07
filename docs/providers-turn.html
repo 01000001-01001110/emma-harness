@@ -289,9 +289,8 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     <strong>That last one was true of streaming and not of batch until
     2026-08-23, and batch is the mode <code>-p</code> runs in.</strong> The
     streaming path had refused an empty <code>stop_reason</code> since
-    <code>DEF-020</code>; this decoder read it with
-    <code>unwrap_or_default()</code> and passed the empty string on. Streaming
-    refused empty <code>stop_reason</code>; batch did not until 2026-08-23.
+    <code>DEF-020</code>. This decoder read it with
+    <code>unwrap_or_default()</code> and passed the empty string on.
   </p>
 
   <p>
@@ -302,23 +301,22 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     exercised.
     <span class="chip test">tested</span>
     <code>a_batch_response_without_a_stop_reason_is_a_fault</code>, with
-    <code>an_ordinary_batch_response_still_decodes</code> as its control.
-    Adding a refusal at a provider boundary is exactly the change that starts
-    rejecting valid traffic, and a boundary that rejects good responses is worse
-    than one that accepts a rare bad one.
+    <code>an_ordinary_batch_response_still_decodes</code> as its control. Watch
+    that control: adding a refusal at a provider boundary is the kind of change
+    that starts rejecting valid traffic, and a boundary that rejects good
+    responses is worse than one that accepts a rare bad one.
   </p>
 
   <p>
-    There is a second cost, and it is not obvious from here:
-    <code>stop_reason == "max_tokens"</code> is what the loop&rsquo;s truncation
-    warning keys on, so in batch mode a turn cut off at the output limit was
-    silent as well as unreported.
+    It cost a second thing. <code>stop_reason == "max_tokens"</code> is what
+    the loop&rsquo;s truncation warning keys on, so in batch mode a turn cut off
+    at the output limit was silent as well as unreported.
   </p>
 
   <p>
-    A stream that closed without ever saying why it stopped did not finish.
-    It was cut. A dropped connection, a proxy timeout and a truncated
-    response all arrive as a <em>clean</em> close, and the code used to return
+    A stream that closed without ever saying why it stopped was cut, not
+    finished. A dropped connection, a proxy timeout and a truncated response all
+    arrive as a <em>clean</em> close, and the code used to return
     <code>Ok</code> with whatever text had turned up.
   </p>
 
@@ -520,8 +518,8 @@ Opaque(Value),</code></pre>
     <code>pick</code> returns <code>0</code> for a missing key, a null, and a
     genuine zero alike. That ambiguity is what the guard exists for. It costs
     one case: a turn that really did generate zero output tokens keeps whatever
-    <code>message_start</code> reported, which is also zero, so nothing is lost
-    in practice. <code>str_at</code> is its string twin and returns an empty
+    <code>message_start</code> reported, which is also zero, so nothing is
+    lost. <code>str_at</code> is its string twin and returns an empty
     string for anything missing. A <code>tool_use</code> with no
     <code>id</code> assembles as a call with an empty id rather than failing.
   </p>
@@ -584,10 +582,11 @@ fn parse_tool_input(json: &amp;str) -&gt; Result&lt;Value, LlmError&gt; {
   </p>
 
   <p>
-    That is the test that would catch a divergence between the two paths, and
-    What it cannot catch: both sides are fixtures written by the same author, so
-    a key the real API sends and neither fixture carries is invisible to it. That is exactly the shape of
-    the failure on <a href="providers-content.html">the previous page</a>.
+    That is the test that would catch a divergence between the two paths. Here
+    is what it cannot catch. Both sides are fixtures written by the same author,
+    so a key the real API sends and neither fixture carries is invisible to it.
+    That is the shape of the failure on
+    <a href="providers-content.html">the previous page</a>.
   </p>
 
   <h2 id="coverage">Coverage</h2>

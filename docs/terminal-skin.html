@@ -89,9 +89,9 @@
 
   <p class="lede">
     <code>render.rs</code> turns an event into styled lines and nothing else: no
-    terminal, no locks, no writes. That is what makes &ldquo;a refused call and
-    a failed call must not look the same&rdquo; a thing a test can assert rather
-    than something somebody has to squint at. Beside it,
+    terminal, no locks, no writes. That is what lets a test assert &ldquo;a
+    refused call and a failed call must not look the same&rdquo;, instead of
+    leaving you to squint at the screen. Beside it,
     <code>spacing.rs</code> owns the one rule about blank rows, and
     <code>welcome.rs</code> composes the block a new user sees once.
   </p>
@@ -103,8 +103,7 @@
     failed with a <code>ToolError</code>, a call the human declined and a call a
     <code>PreToolUse</code> hook refused all arrived as the same bullet in the
     same weight, and the only way to tell them apart was to read the sentence
-    after them. Those are four different things, one of them policy the user
-    cannot override.
+    after them. Those are four different things, one of them policy you cannot override.
   </p>
 
   <p>
@@ -113,8 +112,8 @@
     &#9632;</code> plus the punctuation; <code>ASCII</code> is
     <code>&gt; * + x o X ~ =</code>. The reason for two is a Windows console
     whose output code page is not UTF-8, where <code>&#10003;</code> renders as
-    two pieces of mojibake. A transcript that looks broken reads as a broken
-    program rather than as a stylistic choice.
+    two pieces of mojibake. If the transcript looks broken, you read the program
+    as broken.
   </p>
 
   <p>
@@ -128,8 +127,7 @@
     rather than as seven assertions on seven literals. The property is the
     distinctness; a test on the literals would pass a change that made two of
     them identical. It then asserts separately that refused and blocked differ
-    in <em>colour</em> too, because one of them is a decision the user can
-    revisit and the other is not.
+    in <em>colour</em> too, because one of them is a decision you can revisit and the other is not.
   </p>
 
   <h2 id="skin">The Skin's methods, one per thing that can happen</h2>
@@ -189,8 +187,8 @@
     and appends <code>&hellip; N more lines</code>. That is the
     <em>screen</em> leaving something out. <code>tool_ok</code>'s
     <code>truncated</code> flag is the <em>tool</em> having stopped early, which
-    means the model's copy is short too. Conflating the two would tell a user
-    their output was merely abbreviated when it was actually cut.
+    means the model's copy is short too. Conflate the two and you are told your
+    output was merely abbreviated when it was actually cut.
   </p>
 
   <p>
@@ -200,8 +198,7 @@
     sent a reader looking at the wrong number entirely; the tool's own sentence
     names the right one. A tool
     that did not say which cap bound gets <code>&hellip; output was truncated by
-    the tool, which did not say by which limit</code> rather than an implication
-    that the reader has been told.
+    the tool, which did not say by which limit</code> rather than an implication that you have been told.
     <span class="chip test">tested</span>:
     <code>a_truncated_tool_and_a_long_result_say_different_things</code> and
     <code>a_stated_reason_reaches_the_screen_whole</code>.
@@ -273,8 +270,7 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
     The limit is stated rather than hidden: unicode-width sums per character, so
     a ZWJ emoji sequence is measured as the sum of its parts while a terminal
     draws one glyph. Nothing here can fix that, so at least Emma and its renderer
-    are wrong together. That is the property that keeps a box from being overrun
-    by its own contents.
+    are wrong together.
   </p>
 
   <p>
@@ -368,10 +364,9 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
     themselves carry a small piece of history: the second meter was called
     <code>spend</code> until the owner read <code>ctx 73k/120k &middot; spend
     103k/500k</code> and asked whether the two were the wrong way round. They
-    were not, and the doc explains why the question was still the defect. A label
-    that invites the question is the defect. <code>spend</code> invited it. It
-    reads as a level, like <code>ctx</code>, when it is an accumulation.
-    <code>total</code> is the same five columns, so the drop order is unchanged.
+    were not, and the doc explains why the question was still the defect:
+    <code>spend</code> reads as a level, like <code>ctx</code>, when it is an
+    accumulation. <code>total</code> is the same five columns, so the drop order is unchanged.
     <span class="chip test">tested</span>:
     <code>the_cumulative_meter_is_not_labelled_like_the_snapshot_one</code>
     asserts against the exact numbers from that screen.
@@ -437,10 +432,13 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
   <p>
     Three booleans, and each guards a defect that was on the screen the owner
     photographed. <code>pending</code> makes <code>separate()</code> idempotent,
-    which is what stops two emitters stacking their separators; <code>wrote</code>
-    stops a blank row being the first thing in the transcript, under the shell
-    prompt the user typed <code>emma</code> at, where a gap reads as output that
-    went missing; and <code>last_blank</code>, together with the
+    which stops two emitters stacking their separators.
+  </p>
+
+  <p>
+    <code>wrote</code> stops a blank row being the first thing in the transcript,
+    under the shell prompt you typed <code>emma</code> at, where a gap reads as
+    output that went missing. And <code>last_blank</code>, together with the
     <code>!blank(&amp;lines[0])</code> check, stops a separator landing beside a
     blank row the content wrote itself.
   </p>
@@ -450,16 +448,14 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
     separator, and the test says why that distinction matters:
     <code>blank_rows_a_block_wrote_itself_are_left_alone</code> is framed as the
     assertion that stops &ldquo;collapse blank runs&rdquo; from looking like a
-    reasonable simplification, because a blank line inside a fenced code block
-    is part of what the reader copies out.
+    reasonable simplification, because a blank line inside a fenced code block is part of what you copy out.
     <span class="chip test">tested</span>, seven tests in 235 lines.
   </p>
 
   <p>
     It is a state machine and not a filter over finished output because the
-    terminal is irreversible. Once a row is written it is the terminal's and
-    cannot be taken back, so the decision about a blank row has to be made
-    <em>before</em> it is emitted.
+    terminal is irreversible: once a row is written it cannot be taken back, so
+    the decision about a blank row has to be made <em>before</em> it is emitted.
     <code>wrote_text</code> exists for the one path that bypasses
     <code>apply</code> entirely, the fallback's raw prose write, so it can say
     that rows happened.
@@ -496,12 +492,20 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
   </p>
 
   <p>
-    Three things to type, and no more. A list of twenty options is a list nobody
-    reads. A project with no commands and no skills is told so explicitly rather
-    than left with an absence, because a user who has read about commands and
-    skills and sees neither should learn that this project has none, not wonder
-    whether Emma has them. And the last row says <em>why</em> they are seeing it,
-    from <code>Welcome::reason</code>, so a returning user can tell whether
+    Three things to type, and no more, because a list of twenty options is a
+    list nobody reads.
+  </p>
+
+  <p>
+    A project with no commands and no skills says so explicitly rather than
+    leaving an absence. If you have read about commands and skills and see
+    neither, you should learn that this project has none rather than wonder
+    whether Emma has them.
+  </p>
+
+  <p>
+    The last row says <em>why</em> you are seeing the block at all, from
+    <code>Welcome::reason</code>, so on a return visit you can tell whether
     something is wrong.
   </p>
 
@@ -550,7 +554,7 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
   <p>
     <strong>Not settled here.</strong> Whether the ASCII glyph set is legible as
     <em>structure</em> on the consoles it exists for. The tests assert every
-    byte is ASCII; nobody has looked at a 437 console rendering
+    byte is ASCII, and nobody has looked at a 437 console rendering
     <code>+---+</code> and <code>* Bash</code> and judged it.
     <span class="chip unv">unverified</span>: run under
     <code>EMMA_ASCII_FRAME=1</code> in conhost and photograph it.

@@ -418,9 +418,14 @@ mod tests {
     #[test]
     fn the_tool_paragraph_lists_the_registry_and_marks_the_conditional_ones() {
         let text = tools(&root()).expect("the paragraph builds");
-        let (always, conditional) = text
+        // Split on the *unwrapped* sentence, for the reason the sibling test
+        // above records: the README wraps at 80 columns, so a phrase can break
+        // across a line -- and "Registered only when" did, the first time the
+        // unconditional list grew.
+        let flat = text.replace('\n', " ");
+        let (always, conditional) = flat
             .split_once("Registered only when")
-            .expect("two halves: {text}");
+            .unwrap_or_else(|| panic!("two halves: {text}"));
         for name in ["`Read`", "`Bash`", "`TaskCreate`", "`FindReferences`"] {
             assert!(
                 always.contains(name),

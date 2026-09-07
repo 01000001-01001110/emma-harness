@@ -247,6 +247,16 @@ pub struct App {
     /// The home directory settings.json lives under. Resolved once; a test
     /// points it at a tempdir so no test touches the real file.
     home: Option<std::path::PathBuf>,
+    /// The project's configuration root, for the half of the theme list that
+    /// lives under `<project>/.emma/themes`.
+    ///
+    /// **`emma_harness::discover()` rather than a walk of this module's own**,
+    /// which is the whole reason it is safe to have it here: it is the same
+    /// function `Harness::boot` calls in `main.rs`, so the Settings row and the
+    /// startup that honours its choice cannot disagree about where a theme file
+    /// is. A second walk would be a second answer to one question, which this
+    /// codebase has already paid for once in path containment.
+    harness_root: Option<std::path::PathBuf>,
     /// Test seam for the tool-permission card: `Some` overrides the harness
     /// discovery so a test writes a rule into a tempdir rather than into
     /// whatever project the test binary was launched from.
@@ -356,6 +366,11 @@ impl App {
             settings_hits: super::settings::Hits::default(),
             settings_launch: None,
             home: emma_llm::auth::home_dir(),
+            // Once, at construction. The walk is a handful of `stat`s up to the
+            // filesystem root and the answer cannot change while the process
+            // runs, because `Harness::boot` resolved the same thing from the
+            // same cwd before this frame existed.
+            harness_root: emma_harness::discover().ok(),
             policy_file_override: None,
             ollama_host_override: None,
             harness_dir: std::env::var_os("HOME")
@@ -443,12 +458,18 @@ impl App {
                 .theme
                 .clone()
                 .unwrap_or_else(|| super::theme::BUILT_IN.to_string());
-            // `None` for the harness root: the app holds a home directory and
-            // no project root, so a theme file under `<project>/.emma/themes`
-            // is selectable by `/theme <name>` and does not appear in this
-            // cycler. Narrower than the command, and honestly so — a row that
-            // offered a name it could not step back to would be worse.
-            self.settings.themes = super::theme::names(self.home.as_deref(), None);
+            // **Both directories, and the argument for one of them was
+            // false.** This passed `None` for the project root, reasoning that
+            // "a row that offered a name it could not step back to would be
+            // worse" — but `main.rs` resolves the startup theme with
+            // `Some(&harness.root)`, so a name under `<project>/.emma/themes`
+            // *is* stepped back to, every run. The row was hiding names that
+            // work, which is the same defect as offering names that do not,
+            // pointed the other way: with the themes this build ships living
+            // in exactly that directory, the cycler had one entry and stepped
+            // it to itself while printing a receipt saying it had changed.
+            self.settings.themes =
+                super::theme::names(self.home.as_deref(), self.harness_root.as_deref());
             self.settings.memory_on = stored.memory.unwrap_or(true);
             // Absent means **off** here, the opposite of `memory` above and
             // deliberately so — `crate::settings::Settings::prune_history`
@@ -630,16 +651,25 @@ impl App {
         }
     }
 
-    /// Select and persist a theme — one mechanism with `/theme <name>`, down
-    /// to what it says about when it takes effect.
+    /// Select a theme: apply it to the running screen, and persist it.
     ///
-    /// **This row selects; it does not switch.** The tree it came from held a
-    /// process-wide active theme and repainted on the next frame. Here a theme
-    /// is read once, at startup, into a `Copy` `Palette` that is already
-    /// duplicated across the viewport, its view and `Term` — the ruling
-    /// `session_command`'s `/theme` region argues in full, and the reason there
-    /// is no `--save` on that command either. So the notice says the same thing
-    /// `/theme` says: written, and in force from the next start.
+    /// **This row switches as well as selecting, and until 2026-09-07 it did
+    /// not.** The tree it came from held a process-wide active theme and
+    /// repainted on the next frame; the port kept that seam for the *accent*
+    /// only, so choosing an accent repainted and choosing a theme did nothing
+    /// visible until the next start. The owner reported it, and the report was
+    /// right for the reason inconsistency usually is: one control answering
+    /// while its neighbour beside it does not reads as broken, whatever the
+    /// notice underneath says.
+    ///
+    /// The palette is still `Copy` and still duplicated across the viewport,
+    /// its view and `Term` — which is exactly why the switch is *ambient*
+    /// rather than a write to each copy. `palette::activate_theme` sets one
+    /// cell that every **live** palette reads at draw time, and only `Term`
+    /// builds a live one, so nothing here reaches a test fixture or a `-p` run.
+    ///
+    /// It is still written to `settings.json` as well, because a repaint is not
+    /// a memory: `/theme <name>` and this row remain one mechanism.
     fn settings_theme(&mut self, name: String) {
         // The name must resolve before anything is written — `/theme`'s
         // ruling, and the reason the lookup is done before the write rather
@@ -650,12 +680,19 @@ impl App {
             return;
         }
         self.settings.theme = name.clone();
+        // Apply before writing. The write can fail -- no home directory, a
+        // read-only file -- and a theme somebody can see is worth more than one
+        // that was only recorded, so the failure message is about persistence
+        // and never about the colours on screen.
+        let (theme, _) = super::theme::load(
+            self.home.as_deref(),
+            self.harness_root.as_deref(),
+            Some(&name),
+        );
+        super::palette::activate_theme(theme);
         self.settings.notice = Some(match self.home.as_deref() {
             Some(home) => match crate::session_command::write_theme(home, &name) {
-                Ok(path) => format!(
-                    "theme {name} — written to {}; in force from the next start",
-                    path.display()
-                ),
+                Ok(path) => format!("theme {name} — applied, and written to {}", path.display()),
                 Err(e) => format!("theme {name} — could not be written ({e})"),
             },
             None => format!(
@@ -1516,6 +1553,14 @@ impl App {
         self.home = Some(home);
     }
 
+    /// Point the project half of the theme list at a tempdir, for the same
+    /// reason `set_home` exists: the real one is whatever project the test
+    /// binary happened to be launched from, which is not a fixture.
+    #[cfg(test)]
+    pub(crate) fn set_harness_root(&mut self, root: std::path::PathBuf) {
+        self.harness_root = Some(root);
+    }
+
     /// Aim the tool-permission rows at a settings.local.json a test owns.
     #[cfg(test)]
     pub(crate) fn set_policy_file(&mut self, file: std::path::PathBuf) {
@@ -1624,6 +1669,27 @@ impl App {
         self.code.is_some()
     }
 
+    /// Everything that happens after the page has answered a key, a click, a
+    /// paste or a release, in one place because all four need all of it.
+    ///
+    /// **Four call sites and one body, because the order is the interesting
+    /// part and it was written out four times.** The action is carried out
+    /// first, then the buffer goes to the server, and only then is a completion
+    /// asked for -- a list asked for by a typed dot has to be computed against
+    /// the text that includes the dot, and the first version of this had the
+    /// two the other way round. Four copies of an ordering constraint is four
+    /// chances for one of them to be reordered by somebody who did not know it
+    /// was one.
+    ///
+    /// `code_lsp_changed` returns without posting when the buffer is the one
+    /// already sent, so a cursor key costs a hash and nothing else.
+    fn code_did(&mut self, action: super::code::CodeAction) -> (bool, Option<CodeJob>) {
+        let job = self.code_act(action);
+        self.code_lsp_changed();
+        self.code_lsp_auto_complete();
+        (true, job)
+    }
+
     /// One key for the open Code page. The bool is whether the page kept it;
     /// the predicate is [`super::code::takes_key`], so the shell and the page
     /// cannot disagree about which keys belong to it.
@@ -1642,12 +1708,7 @@ impl App {
             let v = self.code.as_mut().expect("checked just above");
             super::code::handle_key(v, key)
         };
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A left press while the Code page is open. `false` lets the press fall
@@ -1662,12 +1723,7 @@ impl App {
             return (false, None);
         };
         let action = super::code::act(v, hit);
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A bracketed paste while the Code page is open. `false` when the page is
@@ -1677,12 +1733,7 @@ impl App {
             return (false, None);
         };
         let action = v.paste_text(text);
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        (true, job)
+        self.code_did(action)
     }
 
     /// A drag with the button down over the Code page's document: the
@@ -1712,12 +1763,7 @@ impl App {
         if action == super::code::CodeAction::None {
             return (false, None);
         }
-        let job = self.code_act(action);
-        // One hash per key, click or paste. `code_lsp_changed` returns
-        // without posting when the buffer is the one already sent, so a
-        // cursor key costs a hash and nothing else.
-        self.code_lsp_changed();
-        (true, job)
+        self.code_did(action)
     }
 
     /// The wheel while the Code page is open: the body scrolls, the tree does
@@ -1735,10 +1781,15 @@ impl App {
 
     // region: The language-server bridge
     // -----------------------------------------------------------------------
-    // Six small methods, and not one of them waits for anything. Each ends in a
-    // `code_lsp::Handle::post`, which is a `try_send` on a bounded channel: a
-    // full queue or a dead task drops the request and the page simply lacks
+    // Not one of these waits for anything. The ones that talk to the bridge end
+    // in a `code_lsp::Handle::post`, which is a `try_send` on a bounded channel:
+    // a full queue or a dead task drops the request and the page simply lacks
     // decorations. See `super::code_lsp` for the law this obeys and why.
+    //
+    // The comment here used to say "six small methods, each ends in a post",
+    // and by the time anybody read it there were eleven and three of them
+    // posted nothing. A count in a comment is a claim that goes stale the next
+    // time somebody adds a key, so this one no longer makes it.
     // -----------------------------------------------------------------------
 
     /// Wire the page to a bridge. Called once, from `main`.
@@ -1751,46 +1802,60 @@ impl App {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self
-            .code
-            .as_ref()
-            .and_then(|v| v.open.as_ref())
-            .filter(|o| o.note.is_none())
-        else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             self.code_sent = None;
             return;
         };
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
-        self.code_sent = Some((
-            open.path.clone(),
-            super::code_git::hash_bytes(text.as_bytes()),
-        ));
+        self.code_sent = Some((rel.clone(), super::code_git::hash_bytes(text.as_bytes())));
         handle.post(super::code_lsp::Request::Open {
-            rel: open.path.clone(),
-            text,
+            rel: rel.clone(),
+            text: text.clone(),
         });
+        // Colour, asked for with the file rather than on a key: a reader who
+        // has to press something to tell a comment from code is a reader
+        // looking at white text until they know the key exists.
+        handle.post(super::code_lsp::Request::Highlight { rel, text });
     }
 
     /// Send the buffer if, and only if, it is not the one already sent. A key
     /// that moved the cursor changed nothing the server needs to hear about.
+    /// Ask, if typing just warranted it.
+    ///
+    /// **The page decides and this carries**, which is the same split every
+    /// other question on this page follows: the page holds the buffer, the
+    /// cursor and the characters the server named, and the shell holds the
+    /// channel. Called on the same beat as `code_lsp_changed`, so the server
+    /// has the buffer before it is asked about it.
+    fn code_lsp_auto_complete(&mut self) {
+        let wanted = self
+            .code
+            .as_mut()
+            .is_some_and(|v| std::mem::take(&mut v.lsp.want_completion));
+        if wanted {
+            self.code_lsp_complete();
+        }
+    }
+
     fn code_lsp_changed(&mut self) {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             return;
         };
-        if open.note.is_some() {
-            return;
-        }
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         let hash = super::code_git::hash_bytes(text.as_bytes());
-        let rel = open.path.clone();
         if self.code_sent.as_ref() == Some(&(rel.clone(), hash)) {
             return;
         }
         self.code_sent = Some((rel.clone(), hash));
-        handle.post(super::code_lsp::Request::Change { rel, text });
+        handle.post(super::code_lsp::Request::Change {
+            rel: rel.clone(),
+            text: text.clone(),
+        });
+        // Re-coloured on the same beat the buffer is sent, and only then: the
+        // debounce upstream is what keeps a burst of typing from becoming a
+        // burst of requests.
+        handle.post(super::code_lsp::Request::Highlight { rel, text });
     }
 
     /// Tell the server the buffer was written.
@@ -1798,18 +1863,11 @@ impl App {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;
         };
-        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+        let Some((rel, text, _, _)) = self.code_lsp_target() else {
             return;
         };
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
-        self.code_sent = Some((
-            open.path.clone(),
-            super::code_git::hash_bytes(text.as_bytes()),
-        ));
-        handle.post(super::code_lsp::Request::Save {
-            rel: open.path.clone(),
-            text,
-        });
+        self.code_sent = Some((rel.clone(), super::code_git::hash_bytes(text.as_bytes())));
+        handle.post(super::code_lsp::Request::Save { rel, text });
     }
 
     /// Tell the server the buffer is gone, so a document nobody is looking at
@@ -1829,25 +1887,105 @@ impl App {
         self.code_sent = None;
     }
 
+    /// The bridge, or an honest refusal in its place.
+    ///
+    /// **"No bridge in this run" is not "no answer found"**, and the page must
+    /// not show the second when the first is true. Every question a key asks
+    /// began with this block; three copies of a refusal is three chances for
+    /// the fourth question to be added silent.
+    fn code_lsp_handle(&mut self) -> Option<super::code_lsp::Handle> {
+        match self.code_lsp.clone() {
+            Some(handle) => Some(handle),
+            None => {
+                if let Some(view) = self.code.as_mut() {
+                    view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+                }
+                None
+            }
+        }
+    }
+
+    /// What every question about the open file carries: its repo-relative name,
+    /// the buffer as it is on screen, and the cursor.
+    ///
+    /// `None` when there is no readable file open — a refused read has no text
+    /// to ask about, and a request the shell cannot fill comes back to the
+    /// person as silence.
+    ///
+    /// **The buffer, never the file.** `code_git::joined` reassembles the lines
+    /// with the terminator the file was read with, so the server is asked about
+    /// what is on screen rather than about what was last written to disk. That
+    /// sentence was true in five copies of these four lines, and one of them
+    /// had forgotten the `note` check.
+    fn code_lsp_target(&self) -> Option<(String, String, usize, usize)> {
+        let open = self
+            .code
+            .as_ref()?
+            .open
+            .as_ref()
+            .filter(|o| o.note.is_none())?;
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        Some((open.path.clone(), text, open.line, open.col))
+    }
+
+    /// Ask what could be typed at the cursor, and for the signature the cursor
+    /// is inside.
+    ///
+    /// **Both, on one key.** They answer different halves of the same question
+    /// and a person pressing for help wants whichever exists: a completion list
+    /// when there is one, and the signature of the call they are inside when
+    /// there is not. Two keys would make the useful one a guess.
+    fn code_lsp_complete(&mut self) {
+        let Some(handle) = self.code_lsp_handle() else {
+            return;
+        };
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
+            return;
+        };
+        handle.post(super::code_lsp::Request::Completion {
+            rel: rel.clone(),
+            text: text.clone(),
+            line,
+            col,
+        });
+        handle.post(super::code_lsp::Request::Signature {
+            rel,
+            text,
+            line,
+            col,
+        });
+    }
+
+    /// Ask where the symbol under the cursor is used, or what this file
+    /// contains. One function because the two differ only in the request:
+    /// both land in the same panel and are opened by the same key.
+    fn code_lsp_places(&mut self, references: bool) {
+        let Some(handle) = self.code_lsp_handle() else {
+            return;
+        };
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
+            return;
+        };
+        handle.post(if references {
+            super::code_lsp::Request::References {
+                rel,
+                text,
+                line,
+                col,
+            }
+        } else {
+            super::code_lsp::Request::Symbols { rel, text }
+        });
+    }
+
     /// Ask for hover, or for a definition, at the cursor.
     fn code_lsp_ask(&mut self, definition: bool) {
-        let Some(handle) = self.code_lsp.as_ref() else {
-            // The honest refusal: "no bridge in this run" is not "no definition
-            // found", and the page must not show the second when the first is
-            // true.
-            if let Some(view) = self.code.as_mut() {
-                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
-            }
+        let Some(handle) = self.code_lsp_handle() else {
             return;
         };
-        let Some(view) = self.code.as_ref() else {
+        let Some((rel, text, line, col)) = self.code_lsp_target() else {
             return;
         };
-        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
-            return;
-        };
-        let (rel, line, col) = (open.path.clone(), open.line, open.col);
-        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
         handle.post(if definition {
             super::code_lsp::Request::Definition {
                 rel,
@@ -1879,24 +2017,42 @@ impl App {
         let Some((rel, line, col)) = view.apply_lsp(update) else {
             return;
         };
-        // A cross-file jump, and the one place the shell still converts a
-        // column: `col` is a UTF-16 offset into a file nothing had read. The
-        // bridge converts the same-file case itself, where it holds the buffer.
-        let action = super::code::CodeAction::Open(rel.clone());
-        let _ = self.code_act(action);
-        if let Some(view) = self.code.as_mut() {
-            let converted = view
-                .open
-                .as_ref()
-                .and_then(|o| o.lines.get(line))
-                .map(|l| {
-                    let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
-                    l[..bytes.min(l.len())].chars().count()
-                })
-                .unwrap_or(col);
-            view.jump_to(line, converted);
-            view.lsp.note = Some(format!("{rel}:{}", line + 1));
+        self.code_jump(&rel, line, col);
+    }
+
+    /// Put the cursor on one place, opening the file first when it is not the
+    /// one already on screen.
+    ///
+    /// **The one place the shell still converts a column.** `col` is a UTF-16
+    /// offset into a file nothing has read, so it can only be converted once
+    /// the line exists in a buffer; the bridge converts the same-file case
+    /// itself, where it holds that buffer already. A file that is already open
+    /// is **not** re-opened, because a re-read would throw away unsaved edits
+    /// to reach a line inside the very file being edited.
+    fn code_jump(&mut self, rel: &str, line: usize, col: usize) {
+        let same = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .is_some_and(|o| o.path == rel);
+        if !same {
+            let action = super::code::CodeAction::Open(rel.to_string());
+            let _ = self.code_act(action);
         }
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        let converted = view
+            .open
+            .as_ref()
+            .and_then(|o| o.lines.get(line))
+            // The bridge's own conversion, not a fourth copy of it: a column
+            // that crosses this boundary twice by two different rules is the
+            // "one input shape, two answers" defect this codebase has paid for.
+            .map(|l| super::code_lsp::char_column_in(l, col as u32))
+            .unwrap_or(col);
+        view.jump_to(line, converted);
+        view.lsp.note = Some(format!("{rel}:{}", line + 1));
     }
 
     // endregion: The language-server bridge
@@ -1997,8 +2153,24 @@ impl App {
                 self.code_lsp_ask(false);
                 None
             }
+            CodeAction::Complete => {
+                self.code_lsp_complete();
+                None
+            }
             CodeAction::Definition => {
                 self.code_lsp_ask(true);
+                None
+            }
+            CodeAction::Goto(place) => {
+                self.code_jump(&place.rel, place.line, place.col);
+                None
+            }
+            CodeAction::References => {
+                self.code_lsp_places(true);
+                None
+            }
+            CodeAction::Symbols => {
+                self.code_lsp_places(false);
                 None
             }
             CodeAction::Close => {
@@ -4275,7 +4447,11 @@ fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>
             .collect()
     });
 
-    let rows = lang::LANGUAGES
+    // `lang::table()` and not `lang::LANGUAGES`: the card has to show the
+    // servers declared in this file as well as the seven built in, or the one
+    // screen that reports what Emma may start would be the one place a declared
+    // server is invisible.
+    let rows = lang::table()
         .iter()
         .map(|l| LspRow {
             label: l.label.to_string(),
@@ -4287,6 +4463,7 @@ fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>
                 Presence::Absent => LspFound::Absent,
             },
             network: l.network,
+            user_declared: l.user_declared,
         })
         .collect();
 
@@ -7449,12 +7626,68 @@ mod tests {
 
     // -- the Settings screen, live (settings-live) ---------------------------
 
+    /// A Settings screen over a tempdir home **and an empty project root**.
+    ///
+    /// The second half is not tidiness. `App::new` discovers the real project
+    /// root, so without this every test that opens Settings sees whatever theme
+    /// files this repository happens to ship -- and a test whose fixture is the
+    /// working tree is a test that changes meaning when somebody adds a file.
+    /// It broke the moment two themes were shipped, which is how it was found.
     fn open_settings_at(home: &std::path::Path) -> App {
         let mut app = App::new((161, 75));
         app.set_home(home.to_path_buf());
+        // Leaked deliberately: it must outlive the `App`, and a test binary
+        // exiting is what cleans it up. A `TempDir` returned alongside would
+        // change every call site for no gain.
+        let empty = Box::leak(Box::new(tempfile::tempdir().expect("empty project")));
+        app.set_harness_root(empty.path().to_path_buf());
         app.toggle_settings();
         assert!(app.settings_open());
         app
+    }
+
+    /// **The theme row lists what the next start will actually resolve.**
+    ///
+    /// It passed `None` for the project root, so the themes this build ships —
+    /// which live in `<project>/.emma/themes` — were invisible to it. On a
+    /// machine with no themes in the home directory that left the cycler with
+    /// one entry, stepping `emma` to `emma` while reporting that a theme had
+    /// been written. The row was hiding names that work, which is the same
+    /// defect as offering names that do not, pointed the other way.
+    #[test]
+    fn the_theme_row_lists_the_projects_themes_and_not_only_the_homes() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let themes = project.path().join("themes");
+        std::fs::create_dir_all(&themes).expect("themes dir");
+        for name in ["cyberpunk", "noir"] {
+            std::fs::write(themes.join(format!("{name}.json")), "{}").expect("write");
+        }
+        std::fs::create_dir_all(home.path().join(".emma").join("themes")).expect("home themes");
+        std::fs::write(
+            home.path().join(".emma").join("themes").join("mine.json"),
+            "{}",
+        )
+        .expect("write");
+
+        let mut app = App::new((161, 75));
+        app.set_home(home.path().to_path_buf());
+        app.set_harness_root(project.path().to_path_buf());
+        app.toggle_settings();
+
+        let listed = &app.settings.themes;
+        assert!(
+            listed.iter().any(|t| t == "cyberpunk") && listed.iter().any(|t| t == "noir"),
+            "a shipped theme must be reachable from the row: {listed:?}"
+        );
+        assert!(
+            listed.iter().any(|t| t == "mine"),
+            "and the home directory's own themes still are: {listed:?}"
+        );
+        assert!(
+            listed.len() > 1,
+            "with more than one theme the row must have something to step to"
+        );
     }
 
     fn skey(app: &mut App, code: KeyCode) -> bool {
@@ -7511,10 +7744,20 @@ mod tests {
     /// cycler over one name that asserted it moved would be asserting a bug.
     #[test]
     fn the_theme_row_cycles_the_registry_and_persists_like_slash_theme() {
+        // The row now sets the ambient theme, which is process-global, so this
+        // takes the same guard `palette`'s own ambient tests take.
+        let _ambient = super::super::palette::ambient_reset();
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join(".emma").join("themes");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("oxide.json"), "{}").unwrap();
+        // A theme with a colour in it, because the assertion below is about a
+        // colour: an empty `{}` theme is identical to the built-in, so it could
+        // not tell a working switch from a broken one.
+        std::fs::write(
+            dir.join("oxide.json"),
+            r##"{ "name": "oxide", "roles": { "ok": "#00ff00" } }"##,
+        )
+        .unwrap();
         let mut app = open_settings_at(home.path());
         assert_eq!(
             app.settings.themes,
@@ -7534,8 +7777,36 @@ mod tests {
         let notice = app.settings.notice.clone().unwrap();
         assert!(notice.contains("settings.json"), "no receipt: {notice}");
         assert!(
-            notice.contains("next start"),
-            "a theme is read once, at startup, and the row must say so: {notice}"
+            notice.contains("applied"),
+            "the row switches as well as selecting, and must say so: {notice}"
+        );
+        assert!(
+            !notice.contains("next start"),
+            "it no longer defers, so it must not still promise a restart: {notice}"
+        );
+
+        // **The half a receipt cannot prove.** Asserting the sentence only
+        // pins the wording; this asserts the colour, which is what the owner
+        // reported missing. `oxide` sets `ok` to `#00ff00`, and a *live*
+        // palette -- the kind only `Term` builds -- must now draw it, while the
+        // fixture palette beside it keeps the theme it was handed.
+        let live = super::super::palette::Palette::live(
+            super::super::palette::Level::Truecolor,
+            super::super::theme::BUILTIN,
+        );
+        assert_eq!(
+            live.color(super::super::palette::Role::Ok),
+            ratatui::style::Color::Rgb(0, 255, 0),
+            "selecting a theme must repaint a live palette, not only persist"
+        );
+        assert_ne!(
+            super::super::palette::Palette::with_theme(
+                super::super::palette::Level::Truecolor,
+                super::super::theme::BUILTIN,
+            )
+            .color(super::super::palette::Role::Ok),
+            ratatui::style::Color::Rgb(0, 255, 0),
+            "a palette that is not live must keep the theme it was built with"
         );
     }
 
@@ -8467,6 +8738,53 @@ mod tests {
         );
         // Nothing selected, so a release copies nothing and says nothing.
         assert!(matches!(app.code_release(), (false, None)));
+    }
+
+    /// **A file the page could not read is never described to a language
+    /// server, and its questions refuse in words.**
+    ///
+    /// `code_lsp_target` is the one place that decides, and it decides for six
+    /// callers; before it existed one of the six had forgotten the check. A
+    /// refused read has no lines, so what would go out is an empty buffer
+    /// claiming to be the file — after which every diagnostic the server
+    /// published about the real file would be wrong.
+    #[test]
+    fn a_file_the_page_could_not_read_is_never_sent_to_a_server() {
+        let td = tempfile::tempdir().unwrap();
+        let mut app = App::new((120, 40));
+        app.toggle_code(&td.path().display().to_string());
+        let (handle, mut rx) = super::super::code_lsp::channel();
+        app.set_code_lsp(handle);
+        app.code.as_mut().unwrap().set_open(
+            "a.bin".to_string(),
+            super::super::code_git::FileRead::Refused("binary file".to_string()),
+            None,
+        );
+
+        app.code_lsp_open();
+        app.code_lsp_changed();
+        app.code_lsp_saved();
+        app.code_lsp_complete();
+        app.code_lsp_places(true);
+        app.code_lsp_ask(true);
+        assert!(
+            rx.try_recv().is_err(),
+            "an unreadable file was described to the server"
+        );
+
+        // And the bridge is wired, so silence here would be the wrong kind of
+        // pass: a readable file does reach it.
+        std::fs::write(td.path().join("a.txt"), "hello\n").unwrap();
+        let read = super::super::code_git::read_file(&td.path().join("a.txt"));
+        app.code
+            .as_mut()
+            .unwrap()
+            .set_open("a.txt".to_string(), read, None);
+        app.code_lsp_open();
+        assert!(
+            matches!(rx.try_recv(), Ok(super::super::code_lsp::Request::Open { rel, .. }) if rel == "a.txt"),
+            "a readable file must still be sent"
+        );
     }
 
     /// A question the Code page composed reaches the shell, which is the seam

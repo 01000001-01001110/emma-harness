@@ -123,7 +123,7 @@
 <h2 id="shellorargv">Shell or argv</h2>
 
 <p>
-  The argv alternative is genuinely safer: no quoting, no word splitting, no
+  The argv alternative is safer: no quoting, no word splitting, no
   injection surface, no dependence on what <code>sh</code> happens to be. It is
   also unusable for what this tool is for, because almost every command a
   coding agent needs is a shell construct:
@@ -165,7 +165,7 @@
 
 <p>
   The rebuild has a cost: a command that depends on an environment
-  variable the user set will not see it, and nothing in the result says so.
+  variable you set will not see it, and nothing in the result says so.
   Sixteen names is the whole of what a POSIX command line can rely on here.
 </p>
 
@@ -186,7 +186,7 @@
     <code>.wslconfig</code> warnings mixed into the tool output. The two agreed
     only because WSL happened to translate the directory. Measured on the same
     box, when it <em>cannot</em> translate, on a <code>subst</code> drive or a
-    UNC path, WSL starts in the user's home directory instead, prints nothing,
+    UNC path, WSL starts in your home directory instead, prints nothing,
     and exits 0. That is a command running outside the approved root, reported as
     success, and it is a hole rather than something the model can route around,
     because nothing in the result says it happened. Seen by the author of
@@ -319,8 +319,8 @@ spawned  Git\usr\bin\bash.exe
 <h3>The model is told which shell it got, in the result</h3>
 
 <p>
-  The description is hashed into <code>tool_schema_hash</code>, which is how
-  anyone tells which tool surface produced a given answer. A description naming
+  The description is hashed into <code>tool_schema_hash</code>, which is how you
+  tell which tool surface produced a given answer. A description naming
   the local shell would make that hash a property of the machine. So every
   result opens with <code>shell: posix — /bin/sh</code>, on every call rather
   than once per session, because there is no session state here to hang "once"
@@ -524,15 +524,19 @@ spawned  Git\usr\bin\bash.exe
 
 <p>
   <strong><code>timeout_ms</code> together with <code>run_in_background</code> is
-  refused rather than ignored.</strong> One says stop waiting after N; the other
+  refused rather than ignored.</strong> One says stop waiting after N, the other
   says do not wait. Silently dropping either would be the tool deciding which
-  half of a call the caller meant.
+  half of the call you meant.
 </p>
 
 <p>
   <strong>What a task holds is capped on two axes, and only one of them was.</strong>
   <code>MAX_TASK_OUTPUT_BYTES</code> is 256&nbsp;KiB per task, dropping from the
-  front and moving the read cursor with the bytes it pointed at. The number of
+  front and moving the read cursor with the bytes it pointed at.
+</p>
+
+<p>
+  The number of
   remembered tasks had no bound at all until 2026-08-23: a dead task stays
   findable after exit, so a long session held every handle it ever made.
   <code>MAX_REMEMBERED_TASKS</code> is 64, and <strong>only finished tasks are
@@ -553,19 +557,19 @@ spawned  Git\usr\bin\bash.exe
     <code>KillShell</code> returned nothing. <code>CLAUDE.md</code> is explicit
     that <em>&ldquo;a commit that changes what Emma does and leaves the docs
     describing the old behaviour is incomplete&rdquo;</em>, so this was an
-    incomplete commit rather than a documentation chore. An adversarial reviewer
-    found it, not the sweep that had just finished.
+    incomplete commit rather than a documentation chore. It was found by an
+    adversarial reviewer, after the sweep that had just finished missed it.
   </p>
 </div>
 
 <h2 id="containment">The containment story</h2>
 
 <p>
-  <code>cwd</code> is where the command starts, not a wall it is held behind.
-  <code>cd ..</code> leaves. The <code>cwd</code> <em>argument</em> is contained
-  and must resolve inside the root, which is a guard on the argument only. That
-  is in the tool's description, because a boundary the operator believes in and
-  that does not hold is worse than no boundary.
+  <code>cwd</code> is where the command starts. It is not a wall the command is
+  held behind, and <code>cd ..</code> leaves. The <code>cwd</code>
+  <em>argument</em> is contained and must resolve inside the root, which is a
+  guard on the argument only. That is in the tool's description, because a
+  boundary you believe in and that does not hold is worse than no boundary.
 </p>
 
 <p>

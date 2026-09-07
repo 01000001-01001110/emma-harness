@@ -329,6 +329,71 @@ pub struct Diagnosis {
 /// reads [`crate::lang::Language::init_options`] and this constant is rust's.
 pub const INIT_OPTIONS: &str = crate::lang::RUST_INIT;
 
+/// What the server said it can do, narrowed to what a caller acts on.
+///
+/// **The whole point is the trigger characters.** They are what makes a
+/// completion list open by itself: rust-analyzer names `.` and `:`, and a
+/// client that hard-codes its own guess is wrong for every other language.
+/// Reading them from the server is the difference between an editor that
+/// completes where the language says it should and one that completes where
+/// somebody assumed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Characters that should open a completion list. Empty when the server
+    /// offers completion but names none, which means "only when asked".
+    pub completion_triggers: Vec<String>,
+    /// Whether the server offers completion at all. A caller that asks anyway
+    /// gets an error rather than an answer, so the popup key can refuse in
+    /// words instead.
+    pub completion: bool,
+    /// Characters that should open signature help, usually `(` and `,`.
+    pub signature_triggers: Vec<String>,
+    pub signature_help: bool,
+    /// Whether `completionItem/resolve` will fill in documentation that the
+    /// first answer left out. Asking a server that cannot is a round trip for
+    /// nothing.
+    pub resolve_completion: bool,
+    /// Whether the server will name the tokens in a file, and what its type
+    /// numbers mean. Empty when it offers none, which is what makes a page
+    /// draw plain text rather than colour by a guessed legend.
+    pub semantic_tokens: crate::render::Legend,
+}
+
+impl Capabilities {
+    /// Read them off an `initialize` result.
+    ///
+    /// Everything absent is `false` or empty rather than assumed: a server that
+    /// does not say it completes is one this client will not ask.
+    pub fn parse(result: &Value) -> Self {
+        let caps = result.get("capabilities");
+        let provider = |name: &str| caps.and_then(|c| c.get(name));
+        let triggers = |p: Option<&Value>| -> Vec<String> {
+            p.and_then(|p| p.get("triggerCharacters"))
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let completion = provider("completionProvider");
+        let signature = provider("signatureHelpProvider");
+        Self {
+            completion_triggers: triggers(completion),
+            completion: completion.is_some(),
+            signature_triggers: triggers(signature),
+            signature_help: signature.is_some(),
+            resolve_completion: completion
+                .and_then(|c| c.get("resolveProvider"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            semantic_tokens: crate::render::Legend::parse(result),
+        }
+    }
+}
+
 pub struct Client {
     server: Server,
     root: PathBuf,
@@ -351,6 +416,12 @@ pub struct Client {
     /// which they do constantly, because the whole point of `Diagnostics`-shaped
     /// work is asking right after an `Edit`.
     documents: Mutex<HashMap<PathBuf, Document>>,
+    /// What the server said it can do, read from the handshake reply.
+    ///
+    /// A `Mutex` rather than a field set once because the handshake happens
+    /// after the client exists, and the alternative is a half-built client that
+    /// every caller has to remember is half-built.
+    capabilities: Mutex<Capabilities>,
     /// What the server has pushed, and a counter that ticks on every push.
     ///
     /// Diagnostics are the one thing in LSP that is not a request. The server
@@ -545,6 +616,7 @@ impl Client {
             death,
             next_id: AtomicI64::new(1),
             documents: Mutex::new(HashMap::new()),
+            capabilities: Mutex::new(Capabilities::default()),
             published,
             publish_tick: publish_rx,
             child: Mutex::new(None),
@@ -567,11 +639,26 @@ impl Client {
     }
 
     async fn handshake(&self) -> Result<(), ToolError> {
-        // Per language, from the table. `expect` rather than a fallback: a
-        // malformed entry is a bug in this repository, and starting a server
-        // with silently-dropped options is how `read_only` stops being true.
-        let init_options: Value = serde_json::from_str(self.server.language.init_options)
-            .expect("every Language::init_options is valid JSON");
+        // Per language, from the table. Refused rather than defaulted: starting
+        // a server with silently-dropped options is how `read_only` stops being
+        // true, because rust's options are the three switches that keep it from
+        // running the analysed project's code.
+        //
+        // **This used to be an `expect`, and the day `lsp.servers` landed that
+        // became a panic reachable from a configuration file.** It is now
+        // unreachable from one — `lang::plan_user_servers` refuses a declared
+        // `init_options` that is not an object before it can be leaked into a
+        // `Language` — and it stays an error rather than a panic anyway,
+        // because the argument for `expect` was that only this repository could
+        // put a bad value here, and that argument is gone.
+        let init_options: Value =
+            serde_json::from_str(self.server.language.init_options).map_err(|e| {
+                ToolError::Failed(format!(
+                    "the {} language server could not be started: its initializationOptions are \
+                     not valid JSON ({e}). What Emma was about to send: {}",
+                    self.server.language.label, self.server.language.init_options
+                ))
+            })?;
         let params = json!({
             // Sent so the server exits if Emma is killed without unwinding.
             // The one piece of cleanup that survives `kill -9`.
@@ -623,6 +710,73 @@ impl Client {
                         "dynamicRegistration": false,
                         "hierarchicalDocumentSymbolSupport": true,
                     },
+                    // **What is claimed here changes what comes back**, which
+                    // makes this block a behaviour rather than a formality.
+                    // `snippetSupport: false` is the load-bearing line: with it
+                    // true, rust-analyzer sends `push(${1:value})` and a client
+                    // that cannot expand a placeholder inserts those braces
+                    // into somebody's source. Emma carries the snippet flag
+                    // through so a consumer can refuse one, and says here that
+                    // it would rather have plain text.
+                    //
+                    // `insertReplaceSupport` is true because the two ranges
+                    // answer different questions and Emma uses the replacing
+                    // one: a completion accepted in the middle of a word should
+                    // overwrite the word, not leave its tail behind.
+                    "completion": {
+                        "dynamicRegistration": false,
+                        "contextSupport": true,
+                        "completionItem": {
+                            "snippetSupport": false,
+                            "insertReplaceSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                            // **`labelDetailsSupport` is deliberately absent,
+                            // and it was declared here until 2026-09-06.**
+                            // Nothing reads `labelDetails` — `render::Completion`
+                            // has no field for it — and declaring it is not
+                            // free, because a server that sees it moves
+                            // information *out* of `label`. Measured against
+                            // rust-analyzer 1.94.1 on the same fixture, one
+                            // completion after a dot: declared, the label is
+                            // `into`; not declared, it is `into(as Into)`. The
+                            // trait the method comes from was being invited
+                            // into a field this crate then dropped, so the
+                            // capability's only effect was a thinner list.
+                            // Either read the field or stop inviting it.
+                        },
+                    },
+                    // **How a page knows a `//` inside a string is not a
+                    // comment.** The alternative is a grammar, and a grammar is
+                    // a dependency per language plus a second opinion about
+                    // syntax in a crate whose whole argument is asking the
+                    // server that already type-checked the file.
+                    //
+                    // `multilineTokenSupport` is declared because a doc comment
+                    // or a raw string is one token across several lines, and a
+                    // client that cannot take one gets it split or dropped.
+                    "semanticTokens": {
+                        "dynamicRegistration": false,
+                        "requests": { "full": true },
+                        "tokenTypes": [],
+                        "tokenModifiers": [],
+                        "formats": ["relative"],
+                        "multilineTokenSupport": true,
+                    },
+                    // The other half of typing help. `activeParameterSupport`
+                    // is what lets the caller mark which argument the cursor is
+                    // in; without it a signature is a line of text with no
+                    // indication of where you are in it. `labelOffsetSupport`
+                    // is why `render::parse_signatures` has a UTF-16 branch: a
+                    // parameter label may arrive as a pair of offsets into the
+                    // signature rather than as its own string.
+                    "signatureHelp": {
+                        "dynamicRegistration": false,
+                        "signatureInformation": {
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "parameterInformation": { "labelOffsetSupport": true },
+                            "activeParameterSupport": true,
+                        },
+                    },
                 },
                 "workspace": {
                     "workspaceFolders": true,
@@ -641,12 +795,21 @@ impl Client {
         let result = self
             .raw_request("initialize", params, HANDSHAKE_TIMEOUT)
             .await?;
-        // Not inspected beyond existing. Emma asks for four things every LSP
-        // server implements; refusing to start over a missing capability would
-        // trade a working tool for a strict one.
-        let _ = result;
+        // **Read, since 2026-09-06, and this line used to discard it.** The
+        // reply names the characters that should open a completion list, and a
+        // client that guesses them instead is wrong for every language whose
+        // server disagrees with the guess. Nothing here refuses to start over a
+        // missing capability — that would trade a working tool for a strict one
+        // — but what the server does say is now kept rather than dropped.
+        *self.capabilities.lock().expect("capabilities") = Capabilities::parse(&result);
         self.notify("initialized", json!({}));
         Ok(())
+    }
+
+    /// What this server said it can do. Empty until the handshake finishes,
+    /// which is the honest answer during it.
+    pub fn capabilities(&self) -> Capabilities {
+        self.capabilities.lock().expect("capabilities").clone()
     }
 
     /// The current readiness without waiting for anything.

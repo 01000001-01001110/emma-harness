@@ -1,0 +1,23 @@
+{
+  "name": "gray",
+  "about": "For a light terminal with a grey background, measured against #cbcfd4. A mid ground eats contrast from both ends, so every foreground here is darker than the same role in `white` — the theme is the answer to a terminal set to a working grey rather than to paper.",
+  "roles": {
+    "dim":      { "hex": "#414a54", "ansi16": "black" },
+    "ok":       { "hex": "#1c5c22", "ansi16": "green" },
+    "err":      { "hex": "#9c1717", "ansi16": "red" },
+    "warn":     { "hex": "#6d4300", "ansi16": "yellow" },
+    "info":     { "hex": "#0a4f66", "ansi16": "cyan" },
+    "accent":   { "hex": "#7a1560", "ansi16": "magenta" },
+    "ground":   { "hex": "#cbcfd4", "ansi16": "white" },
+    "comment":  { "hex": "#515a64", "ansi16": "black" },
+    "keyword":  { "hex": "#5c2382", "ansi16": "magenta" },
+    "string":   { "hex": "#17512c", "ansi16": "green" },
+    "number":   { "hex": "#7a3505", "ansi16": "yellow" },
+    "type":     { "hex": "#003a42", "ansi16": "cyan" },
+    "function": { "hex": "#14389c", "ansi16": "blue" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#bcc2c9" }
+  }
+}

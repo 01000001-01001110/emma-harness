@@ -1,0 +1,23 @@
+{
+  "name": "red",
+  "about": "For a dark terminal, measured against #1a0b0c — an ember black. A red room needs one cold thing in it or nothing separates, so `function` is deliberately the single blue on the page; ground and accent carry the hue.",
+  "roles": {
+    "dim":      { "hex": "#a9908d", "ansi16": "dark_gray" },
+    "ok":       { "hex": "#9cd67f", "ansi16": "light_green" },
+    "err":      { "hex": "#ff5f5f", "ansi16": "light_red" },
+    "warn":     { "hex": "#ffb454", "ansi16": "light_yellow" },
+    "info":     { "hex": "#e0a3d8", "ansi16": "light_magenta" },
+    "accent":   { "hex": "#ff4d4d", "ansi16": "red" },
+    "ground":   { "hex": "#1a0b0c", "ansi16": "black" },
+    "comment":  { "hex": "#8a6a68", "ansi16": "dark_gray" },
+    "keyword":  { "hex": "#ff8fb0", "ansi16": "light_red" },
+    "string":   { "hex": "#c9d98a", "ansi16": "green" },
+    "number":   { "hex": "#ffb457", "ansi16": "yellow" },
+    "type":     { "hex": "#e5a3e0", "ansi16": "magenta" },
+    "function": { "hex": "#a8c8f0", "ansi16": "light_blue" }
+  },
+  "pairs": {
+    "chip":      { "fg": "ground", "bg": "accent" },
+    "selection": { "fg": "accent", "bg": "#2e1618" }
+  }
+}

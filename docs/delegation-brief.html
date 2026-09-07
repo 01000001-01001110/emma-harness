@@ -230,11 +230,10 @@ fn brief(args: &amp;Value) -&gt; String {
   </p>
 
   <p>
-    It is composed here rather than in <code>Goal::opening</code>, and the note
-    above that function records what a preamble on every input cost.
-    <code>Goal::opening</code> is the user's words and must stay that way. This
-    text is not a user's words: it is a work order the calling model wrote, and
-    the fields are its own.
+    It is composed here and not in <code>Goal::opening</code>, and the note above
+    that function records what a preamble on every input cost.
+    <code>Goal::opening</code> carries your words and must stay that way. This
+    text is a work order the calling model wrote, and the fields are its own.
   </p>
   <span class="src">crates/emma/src/goal.rs — Goal::opening</span>
 
@@ -403,9 +402,9 @@ impl DoneCheck for SubagentClaim {
     traffic goes to the provider on the same key and host the parent is already
     using ungated, and declaring <code>true</code> would demand a
     <code>NetworkTarget</code> and produce a prompt to approve
-    <code>api.anthropic.com</code> whose only possible answer is yes, which is how
-    an operator learns to answer without reading. Any sub-tool that reaches a
-    real host asks the same gate, in the same process, against the same
+    <code>api.anthropic.com</code> whose only possible answer is yes. That is how
+    you learn to answer without reading. Any sub-tool that reaches a real host
+    asks the same gate, in the same process, against the same
     <code>hosts_allowed</code> set. If that trade ever looks wrong, the doc names
     the fix: a third axis on <code>ToolMeta</code> for delegated egress, not a
     flipped bit.

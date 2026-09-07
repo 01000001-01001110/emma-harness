@@ -68,11 +68,11 @@
   </nav>
 
   <p class="lede">
-    A hook is an operator-authored program the runtime runs at one of three
+    A hook is a program you write, and the runtime runs it at one of three
     dispatch sites. A <code>PreToolUse</code> hook is the only thing in Emma that
-    refuses a call and cannot be answered away at a prompt. It is also a program
-    the operator wrote, running at the highest-privilege point of the turn, which
-    is why this file is a subprocess supervisor rather than configuration.
+    refuses a call and cannot be answered away at a prompt. It is also your own
+    program, running at the highest-privilege point of the turn, which is why
+    this file is a subprocess supervisor and not configuration.
   </p>
   <span class="src">crates/harness/src/hooks.rs — module doc</span>
 
@@ -120,8 +120,8 @@
     the box with Emma's permissions, and Emma's permissions include writing the
     user's source tree. Canonicalisation happens before the
     <code>starts_with</code>, so a symlink out of <code>hooks/</code> is caught
-    too. The executable-bit check is not the boundary; it catches the operator who
-    forgot to <code>chmod +x</code>, which would otherwise surface much later as a
+    too. The executable-bit check is not the boundary; it catches the forgotten
+    <code>chmod +x</code>, which would otherwise surface much later as a
     spawn failure that reads like something else. <code>what</code> names the
     caller in the sentence, because "no such command" with no subject is a
     sentence an operator cannot act on. The same function is what the status line
@@ -156,8 +156,8 @@
     <li><code>contain</code> resolves the command.</li>
     <li>A <code>UserPromptSubmit</code> hook carrying a non-empty matcher fails the
       boot, because there is no tool name to match on that event. Claude Code
-      ignores the field there; Emma names it, on the rule that a hook the operator
-      believes is conditional and which never fires is worse than one that always
+      ignores the field there; Emma names it, on the rule that a hook you
+      believe is conditional and which never fires is worse than one that always
       does. A matcher that is present but empty or whitespace is treated as
       absent, since <code>"matcher": ""</code> is what a group written for a tool
       event looks like when it was copied for this one.</li>
@@ -277,10 +277,10 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
 
   <p>
     Resolving an enrichment failure to deny would mean a hook script with a syntax
-    error locks the user out of their own agent: every prompt refused, by the
+    error locks you out of your own agent: every prompt refused, by the
     program that was supposed to add the branch name to it. Losing the enrichment
     silently is what <code>PromptVerdict::notices</code> prevents; losing it
-    visibly is a bad turn the user can see and fix. This is also Claude Code's
+    visibly is a bad turn you can see and fix. This is also Claude Code's
     documented behaviour on the event, so an existing configuration behaves the
     same under both runtimes.
   </p>
@@ -436,7 +436,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
   <p>
     A tool hook receives <code>event</code>, <code>tool_name</code>,
     <code>tool_call_id</code>, <code>args</code>, <code>session_id</code>,
-    <code>turn_id</code> and the operator's own <code>config_text</code>. On
+    <code>turn_id</code> and your own <code>config_text</code>. On
     <code>PostToolUse</code> it also receives <code>result_content</code>,
     <code>truncated</code> and <code>error</code>, the last being null on success.
     An audit hook that cannot tell a success from a failure is an audit log that
@@ -447,7 +447,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     <code>HookCall</code> is built by the caller field by field rather than from a
     <code>&amp;ToolOutcome</code>, because <code>display</code> is for the terminal
     and is not what the model saw. A hook shown more than the model is shown would
-    be a side channel the operator did not know they were operating, and plumbing
+    be a side channel you did not know you were running, and plumbing
     another internal field through needs a signature change a reviewer will see.
   </p>
   <span class="src">crates/harness/src/hooks.rs — HookCall, HookResult, ResolvedHook::payload</span>
@@ -606,10 +606,9 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
       A reading of the function quoted above, written as prose rather than
       drawn. Every other figure on this site is generated from source by
       <code>crates/docsgen</code>; this one is not, because an interleaving of
-      three processes over time is not a structure any lookup returns:
-      the constants near it (<code>EXEC_DRAIN_GRACE_MS</code>, the caps) state
-      no ordering, and a picture asserting one would be this argument wearing a
-      generated diagram's authority. It was a hand-drawn SVG until 2026-09-05.
+      three processes over time is not a structure any lookup returns, and the
+      constants near it (<code>EXEC_DRAIN_GRACE_MS</code>, the caps) state no
+      ordering. It was a hand-drawn SVG until 2026-09-05.
       Both capped pipe reads run <em>concurrently</em> with
       <code>child.wait()</code> in a <code>select!</code> rather than in front
       of it, so completion is the child's own exit and the pipes are drained
@@ -723,13 +722,13 @@ where
     pipes and its exit code, and claims nothing about that child's
     descendants.</strong> On the timeout path <code>kill_on_drop</code> kills the
     hook and only the hook. Whatever the hook started is left, because Emma cannot
-    tell a broken hook's orphans from the daemon the operator meant to start.
+    tell a broken hook's orphans from the daemon you meant to start.
   </p>
 
   <p>
-    The cost is stated as a cost: a hung hook's descendants are unreclaimable,
-    nothing short of reaping bounds that, and the only available mitigation is a
-    clause in the transcript telling the operator to look. That is a report, not a
+    A hung hook's descendants are therefore unreclaimable. Nothing short of
+    reaping bounds that, and the only mitigation on offer is a clause in the
+    transcript telling you to look, which is a report rather than a
     bound.
   </p>
   <span class="src">crates/harness/src/hooks.rs — exec</span>

@@ -141,9 +141,8 @@
         <td><strong>Anything at all about OpenAI.</strong> Nothing in
             <code>openai_compat.rs</code> has reached
             <code>api.openai.com</code>. Both values that distinguish the OpenAI
-            wire from OpenRouter's &mdash;
-            <code>max_completion_tokens</code> and a refused
-            <code>temperature</code> &mdash; are the fork's claims restated, and
+            wire from OpenRouter's (<code>max_completion_tokens</code>, and a
+            refused <code>temperature</code>) are the fork's claims restated, and
             a loopback stub can only prove Emma sends what the constant says.</td>
         <td>One call with an OpenAI key to a cheap model sending
             <code>max_tokens</code>, expecting a 400 that names
@@ -384,6 +383,26 @@
             cell size changes.</td>
       </tr>
       <tr>
+        <td><strong>Which of the Code page's function keys a terminal actually
+            delivers.</strong> The page binds <code>F2</code> through
+            <code>F10</code>, six of them to language-server questions, and
+            <code>handle_key</code> matches <code>KeyCode::F(n)</code> with no
+            fallback spelling for any of them: a key the terminal keeps never
+            reaches the page and nothing on screen says why. Two cases are
+            reported and neither has been measured here. On macOS the top row is
+            media keys unless <em>Use F1, F2, etc. keys as standard function
+            keys</em> is on, which would cost Terminal.app and iTerm2 users every
+            one of the six. On GTK, <code>F10</code> is the menu-bar accelerator
+            by default, which would cost GNOME Terminal the document-symbols key
+            specifically. Both are read off vendor documentation rather than
+            observed, and this box runs Windows.</td>
+        <td>A keystroke dump on Terminal.app, iTerm2 and GNOME Terminal,
+            recording for each of <code>F2</code>&ndash;<code>F10</code> whether
+            the event arrives, with the macOS preference in both positions. If
+            any is swallowed, the answer is a second spelling on the help row
+            rather than a note in the docs.</td>
+      </tr>
+      <tr>
         <td><strong>A resume across a real directory change, on a console.</strong>
             <code>Agent::resume_in_place</code> is driven directly against
             temporary directories by every test it has.</td>
@@ -417,6 +436,10 @@
           <td>Build on the Mac. It could not be compiled on this machine.</td></tr>
       <tr><td>The Help page and the Code page, drawn on a console. Both landed 2026-09-06 and what exists for each is a <code>Buffer</code>.</td>
           <td>Open a framed session, press <code>Ctrl+/</code> and <code>Alt+c</code>, at a few widths and at 40 columns.</td></tr>
+      <tr><td>The completion popup and the places panel, on a console. Both landed 2026-09-06 and everything asserted about either is a cell buffer: whether a popup that covers the line being typed is usable, whether the panel's right half is where a reader's eye is, and whether either flickers as it repaints are all open.</td>
+          <td>Open a file on the Code page, type until the list opens, then press <code>F8</code> and <code>F10</code>, and say what it was like.</td></tr>
+      <tr><td>Semantic-token colour below truecolor. The six source roles carry a 256-colour index and a named 16-colour each, and nothing has drawn a file at either. At sixteen colours the comment, the keyword and the type land on <code>DarkGray</code>, <code>Magenta</code> and <code>Cyan</code>, which a terminal's own palette can move anywhere; with no colour at all the only separation left is <code>Modifier::DIM</code> on the comment.</td>
+          <td>Open the same file with <code>EMMA_COLORS=256</code>, then <code>EMMA_COLORS=16</code>, then <code>NO_COLOR</code>, and say whether a comment is still distinguishable from the code beside it.</td></tr>
       <tr><td>Whether <code>Ctrl+/</code> arrives as <code>Ctrl+/</code>. Some terminals send <code>0x1F</code>, <code>Ctrl+_</code> or <code>Ctrl+7</code>; the folding is copied from the fork and believed rather than measured.</td>
           <td>A keystroke dump on macOS Terminal.app, iTerm2 and Windows Terminal.</td></tr>
       <tr><td>Whether a rebound chord in <code>~/.emma/keybindings.json</code> actually takes. The parse, the load and the printed label are tested; no key has been pressed.</td>

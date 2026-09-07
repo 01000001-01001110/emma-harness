@@ -259,9 +259,19 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     Memory page carries <code>NO_INDEX</code> on painted cells, and
     <code>memory_draws_one_input_box_and_says_what_it_cannot_do</code> asserts
     the search key's honesty notice. The test names on this page when it was
-    written (<code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>,
-    <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>)
-    no longer exist. The Data Explorer page was removed 2026-08-27.
+    written (<em>the_memory_page_says_it_has_no_index_rather_than_inventing_one</em>,
+    <em>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</em>) no
+    longer exist, and are set in italics rather than as citations so that
+    neither a reader nor the citation checker goes looking for them. The Data
+    Explorer page was removed 2026-08-27. The guarantee behind the first of
+    them (a page that cannot read its store says so, and says which store)
+    survived the removal and is now
+    <code>an_unreadable_store_says_so_and_says_which_store</code>, which renders
+    the Memory page over a path that is a file rather than a directory and
+    asserts the failure notice names <code>.emma/memory</code>. Its own doc
+    records the gap it leaves: only the memory arm is driven, because the
+    harness feed reads a private field no seam outside <code>app.rs</code> can
+    aim at a test-controlled path.
   </p>
 
   <p>
@@ -368,7 +378,7 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
-    <strong>The keys, in full, because four of them appear nowhere else on this
+    <strong>The keys, in full, because most of them appear nowhere else on this
     site.</strong> <code>Tab</code> moves between the tree, the body and the ask
     box at the foot of the page; <code>Enter</code> opens a file from the tree
     and starts editing in the body; <code>F2</code> or <code>Ctrl+s</code>
@@ -376,8 +386,44 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     <code>F4</code> copies; <code>F5</code> asks the language server what is
     under the cursor and <code>F6</code> asks where it is defined;
     <code>F7</code> hands the repository to the configured editor;
+    <code>F8</code> asks where the symbol under the cursor is used and
+    <code>F10</code> asks what the open file contains, both of which draw the
+    places panel below; <code>Ctrl+space</code> and <code>F9</code> both ask
+    for a completion list;
     <code>Alt+c</code> closes the page, which its own footer says in every mode.
     A definition in another file opens that file at the line.
+  </p>
+
+  <p>
+    The six function keys that ask a server are function keys for one reason:
+    inside the document every letter is text, so a mnemonic could not reach
+    them. <code>F8</code> and <code>F10</code> are the pair rather than the two
+    after <code>F6</code>, because <code>F7</code> already opens the outside
+    editor and <code>F9</code> already asks for a completion, and moving either
+    would change a key somebody has learned. Completion has two spellings
+    because one of them does not survive every terminal:
+    <code>Ctrl+space</code> is the chord every editor uses and some terminals
+    swallow it, and <code>F9</code> is the one that always arrives. Both are on
+    the help row, so nobody has to discover the second after the first appeared
+    to do nothing.
+  </p>
+
+  <p>
+    <strong>That second spelling was advertised for a fortnight and did
+    nothing.</strong> <code>takes_key</code> refused every <code>Ctrl</code>
+    chord but the save, so the completion arm below it was unreachable, while
+    the help row, the module header and a commit message all named the key. The
+    fix needed both halves: relaxing the predicate alone would have let the
+    chord fall into <code>handle_key</code>'s blanket <code>Ctrl</code> arm and
+    <em>saved the file</em> when somebody asked for a completion.
+    <span class="chip test">tested</span>:
+    <code>ctrl_space_asks_for_a_completion_and_does_not_save</code> asserts both
+    halves in one test.
+    <span class="chip test">tested</span> &mdash;
+    <code>f8_asks_where_a_symbol_is_used_and_f10_what_the_file_contains</code>
+    asserts both from the tree and from inside the document, and
+    <code>the_list_keys_refuse_in_words_when_there_is_no_file_to_ask_about</code>
+    asserts the refusal reaches the status row rather than being silent.
   </p>
 
   <p>
@@ -438,8 +484,12 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   <p>
     <code>crates/emma/src/term/code_lsp.rs</code> was a declared stub until
     2026-09-06 and this paragraph said so. It is the bridge between this page
-    and the language servers the model's tools already run, and it is 1,646
-    live lines that <code>main.rs</code> spawns. Nothing on the input path waits
+    and the language servers the model's tools already run, and it is 2,195
+    lines that <code>main.rs</code> spawns, of which 1,107 come before the
+    <code>#[cfg(test)]</code> on line 1,108.
+    <span class="chip cert">certified</span> by
+    <code>wc -l crates/emma/src/term/code_lsp.rs</code> and
+    <code>grep -n '#\[cfg(test)\]'</code> on it, 2026-09-06. Nothing on the input path waits
     for a server: the handle only ever offers a request to a bounded channel, so
     a busy or dead server means the page lacks decorations rather than pausing.
     It calls the language table in <code>tools/lsp</code> rather than carrying a
@@ -468,6 +518,250 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
     that has stopped. Anybody simplifying it back to a synchronous call needs the
     475 in front of them.
   </p>
+
+  <h3 id="completion">The completion list, and when it opens by itself</h3>
+
+  <p>
+    Two things open it, and they are different questions. A <em>trigger
+    character</em> is the server&rsquo;s own claim that something follows it, so
+    it opens a list at once with nothing typed: after a dot the useful answer is
+    the whole set of members. An identifier character opens one only once the
+    word reaches <code>MIN_WORD</code>, which is 3, counted <em>after</em> the
+    character just typed, so the list appears on the third letter. That
+    is later than a graphical editor puts it, and the reason is that here the
+    popup covers the code being written rather than floating over its own layer.
+  </p>
+
+  <p>
+    <strong>The triggers come from the handshake reply, never from this
+    client.</strong> rust-analyzer names <code>.</code> and <code>:</code>;
+    another language&rsquo;s server names something else, and a hard-coded guess
+    is wrong everywhere the guess does not hold. A server that names none gets
+    no guesses: typing a dot then asks for nothing, and <code>F9</code> is what
+    remains.
+    <span class="chip test">tested</span>:
+    <code>a_trigger_character_asks_at_once</code>,
+    <code>an_identifier_asks_only_once_it_is_long_enough_to_narrow</code> (which
+    asserts one and two letters do <em>not</em> ask), and
+    <code>with_no_triggers_named_a_dot_asks_for_nothing</code>.
+  </p>
+
+  <p>
+    <strong>The popup owns a short list of keys and lets the editor keep every
+    other.</strong> <code>Esc</code> closes it, <code>Up</code> and
+    <code>Down</code> move the selection, and <code>Tab</code> and
+    <code>Enter</code> both accept: Tab because it is the habit from every
+    editor, Enter because it is what somebody who has never used one tries. Everything else falls through, which is the rule that keeps this from
+    being the feature people turn off: a popup that swallowed Backspace would
+    strand somebody mid-word. Typing a character both inserts it and narrows the
+    list, and a list nothing matches closes.
+    <span class="chip test">tested</span>:
+    <code>the_popup_takes_its_own_keys_and_lets_the_editor_keep_the_rest</code>
+    and <code>typing_past_every_match_closes_the_popup</code>.
+  </p>
+
+  <p>
+    Narrowing is local. Typing into an open list filters what is already there
+    rather than asking again, because a request per keystroke is what makes an
+    editor feel slow. The exception is a list the server marked
+    <code>isIncomplete</code>: that means it truncated its own answer and expects
+    to be asked once more, so the next character re-queries.
+    <span class="chip test">tested</span>:
+    <code>typing_into_an_open_list_narrows_it_unless_the_server_wants_re_asking</code>
+    covers both halves in one test.
+  </p>
+
+  <p>
+    <strong>Asking for a completion needs the document to be being
+    edited</strong>, which no other question on this page needs. Every other one
+    answers into a note or a panel; this one answers into a popup whose only
+    exit key belongs to the editor layer. Opened from the tree or over a
+    read-only document it covered the code with nothing to dismiss it, and
+    <code>Esc</code> closed the page out from under it. So outside the editor
+    both keys refuse in words: <em>&ldquo;press Enter to edit before asking what
+    can be typed&rdquo;</em>.
+    <span class="chip test">tested</span>:
+    <code>a_completion_asked_for_outside_the_editor_refuses_in_words</code>
+    asserts the refusal, that no popup opened, and that the same key asks once
+    <code>Enter</code> has started an edit.
+  </p>
+
+  <p>
+    <strong>An empty answer is a sentence, not an empty box.</strong> No items
+    means <em>&ldquo;nothing to complete here&rdquo;</em> on the status row and
+    no popup at all. An answer about a line the cursor has since left is dropped
+    rather than applied, for the same reason: it would offer members of whatever
+    was under the cursor a moment ago.
+  </p>
+
+  <p>
+    Emma declares <code>snippetSupport: false</code> in the handshake, because a
+    client that cannot expand a placeholder and claims it can inserts
+    <code>push(${1:value})</code> into somebody's source. A server that sends a
+    snippet anyway is not refused: the candidate is offered as its filter text,
+    so accepting it types <code>push</code>.
+  </p>
+
+  <p>
+    <strong>Accepting uses the server's replace range only while the cursor is
+    still where it was asked.</strong> A completion is computed at one position
+    and the list narrows locally as somebody keeps typing, so by the time
+    <code>Enter</code> lands the cursor has usually moved past where the server
+    was looking. rust-analyzer answers a dot completion with an <em>empty</em>
+    replace range at the request position &mdash; certified against 1.94.1
+    &mdash; so applying it after three more letters inserted the candidate and
+    left those three behind: <code>c.pus</code> accepted as <code>push</code>
+    became <code>c.pushpus</code>. Once the cursor has moved, the word before it
+    is used instead, the same fallback a server naming no range at all already
+    gets.
+    <span class="chip test">tested</span>:
+    <code>a_server_range_is_dropped_once_the_cursor_has_moved_past_it</code>
+    reproduces exactly that rust-analyzer answer and asserts the three typed
+    letters are replaced, not doubled.
+  </p>
+
+  <p>
+    Signature help shares the status row rather than opening a second popup. The
+    active signature is flattened to one line with the current argument in
+    square brackets. Brackets rather than a colour, so the marker survives the
+    ASCII skin and a terminal with no colour at all. When the parameter
+    cannot be found inside the signature label, the bare label is drawn: a marker
+    on the wrong argument is worse than none.
+  </p>
+  <span class="src">crates/emma/src/term/code.rs &mdash; <code>should_complete</code>, <code>MIN_WORD</code>, <code>word_start</code>, <code>takes_key</code>, <code>popup_key</code>, <code>ask_complete</code>, <code>accept_completion</code>, <code>set_open</code>; crates/emma/src/term/code_lsp.rs &mdash; <code>candidate</code>, <code>signature_line</code>; tools/lsp/src/client.rs &mdash; the <code>completion</code> and <code>signatureHelp</code> capability blocks</span>
+
+  <p>
+    <strong>Opening another file drops every answer about the last one</strong>:
+    the popup, the places panel, the hover and the syntax colours. The popup is
+    the one that could do damage rather than only mislead, because it inserts
+    into the buffer, so one left standing across a file switch would put the old
+    file's candidate into the new file's text. The other three are merely wrong
+    on screen, which is reason enough on its own.
+    <span class="chip test">tested</span>:
+    <code>opening_a_file_drops_the_answers_about_the_previous_one</code>.
+  </p>
+
+  <h3 id="places">The places panel</h3>
+
+  <p>
+    <code>F8</code> asks where the symbol under the cursor is used and
+    <code>F10</code> asks what the open file contains, and both answers land in
+    one panel. They share a type because they share a purpose and a key: both
+    draw as a row you can open, and two nearly identical lists would be two
+    places to fix the next time the opening rule changes.
+  </p>
+
+  <p>
+    It draws on the <strong>right half of the document</strong> when the pane is
+    at least 60 columns wide, and across the whole width below that, because half
+    of a narrow pane is a column of ellipses. The list is a set of destinations
+    rather than an annotation on a line, so unlike the hover and the completion
+    popup it has no line it must stay beside, and keeping the left half clear
+    means the code stays readable while somebody arrows through answers about it.
+    <code>PLACES_MAX_ROWS</code> is 12, and the height of the pane can lower that
+    further.
+  </p>
+
+  <p>
+    The header names what was asked and how many came back, which is the whole
+    reason it carries a count: twelve rows out of forty is a different fact from
+    twelve rows. The chosen row is drawn as a styled cell rather than as a
+    colour, the rule every list on this page follows.
+  </p>
+
+  <p>
+    <strong>The panel takes every key while it is up</strong>, the hover
+    popup&rsquo;s rule rather than the completion popup&rsquo;s, and for one more
+    reason than the hover has: it is a destination, so <code>Enter</code> belongs
+    to it rather than to the buffer underneath. Arrows move, <code>Enter</code>
+    opens the chosen row, and anything else closes it, which makes leaving the
+    cheapest thing on the page. A row naming the file already open is a cursor
+    move rather than a read.
+    <span class="chip test">tested</span> &mdash;
+    <code>the_places_panel_moves_opens_and_closes</code> asserts the buffer is
+    unchanged by the keys the panel ate, and
+    <code>the_places_panel_is_painted_with_its_count_and_a_marked_row</code>
+    reads the painted cells.
+  </p>
+
+  <p>
+    <strong>A reference outside the repository root is dropped rather than
+    listed</strong>, which is the containment rule the definition jump already
+    follows: offering a row that opens a file the page cannot save is offering a
+    dead end. The comparison uses <code>relative_to</code> rather than
+    <code>strip_prefix</code>, because on Windows the root canonicalises to
+    <code>\\?\E:\&hellip;</code> while the server&rsquo;s URI comes back as
+    <code>E:\&hellip;</code>, and the raw comparison drops every hit in the
+    repository instead. The definition jump paid for that one first. Unlike the
+    model-facing tool, which reports outside hits as a count, the page says
+    nothing about what it dropped.
+  </p>
+
+  <p>
+    An empty answer is a sentence again: <em>&ldquo;no results for
+    &hellip;&rdquo;</em> on the status row, and no panel.
+    <span class="chip test">tested</span>:
+    <code>no_results_is_a_sentence_rather_than_an_empty_panel</code>.
+  </p>
+  <span class="src">crates/emma/src/term/code.rs &mdash; <code>Place</code>, <code>Places</code>, <code>PLACES_MAX_ROWS</code>, <code>places_key</code>, <code>draw_places</code>; crates/emma/src/term/code_lsp.rs &mdash; <code>reference_places</code>, <code>symbol_places</code></span>
+
+  <h3 id="colour">Colour comes from the type-checker, not from a grammar</h3>
+
+  <p>
+    Code on this page is coloured from
+    <code>textDocument/semanticTokens/full</code>. That is how a <code>//</code>
+    inside a string stays a string: the answer comes from the server that
+    type-checked the file, so nothing here has an opinion about syntax. The
+    alternative was a grammar, which is a dependency per language and a second
+    opinion about the thing this crate exists to ask somebody else.
+  </p>
+
+  <p>
+    <strong>The legend is read from the handshake, and without it nothing is
+    coloured.</strong> The wire sends token <em>numbers</em>, and type 3 is
+    whatever this server put third in its own list; a client with a hard-coded
+    legend colours Rust correctly and Python wrongly, silently. So an empty
+    legend draws plain text rather than colouring by a guessed order, and the
+    request is not even sent. A file with no server behind it is plain text for
+    the same reason. Every character resolves to <code>Role::Text</code> when no
+    token covers it, which is also the answer for ordinary identifiers.
+  </p>
+
+  <p>
+    Colour is asked for when the file opens, not on a key: a reader who has to
+    press something to tell a comment from code is a reader looking at white
+    text until they learn the key exists. After that it is re-asked on the same
+    beat the buffer is sent to the server, which the 300&nbsp;ms typing debounce
+    already governs, so a burst of typing is one request rather than one per
+    keystroke.
+  </p>
+
+  <p>
+    The painter finds a line's tokens with two binary searches rather than a
+    filter, and that is a measurement rather than a preference:
+    <code>parse_tokens</code> returns them in wire order, which is line order,
+    so a line's tokens are a contiguous run. Before that the painter asked every
+    token in the file about every cell it drew, which for
+    <code>code.rs</code> is 28,330 tokens against roughly five thousand cells,
+    on every repaint, which is every keystroke. A line with nothing on it and
+    every line when there is no server both give an empty slice, which is what
+    makes the plain-text fallback one branch instead of two.
+  </p>
+
+  <p>
+    Six colour roles come out of it: comment, keyword, string, number, type and
+    function. The protocol offers twenty-odd token types and the rest map onto
+    <code>Other</code>, which draws as text: a distinction nobody can see costs
+    and pays nothing. Tokens whose line the buffer no longer has are dropped,
+    because colouring by a stale position is how highlighting ends up half a line
+    out, and tokens belonging to another file are never painted over this one.
+    <span class="chip test">tested</span>:
+    <code>a_comment_and_the_code_beside_it_are_painted_differently</code> asserts
+    the painted cells differ, which is the only claim that matters, and
+    <code>tokens_for_another_file_are_not_painted_over_this_one</code> covers an
+    answer that arrives about a different file.
+  </p>
+  <span class="src">crates/emma/src/term/code.rs &mdash; <code>syntax_role</code>, <code>tokens_on_line</code>; crates/emma/src/term/app.rs &mdash; <code>code_lsp_open</code>, <code>code_lsp_changed</code>; crates/emma/src/term/code_lsp.rs &mdash; <code>Request::Highlight</code>, <code>DEBOUNCE</code>; tools/lsp/src/render.rs &mdash; <code>Legend</code>, <code>TokenKind</code>, <code>parse_tokens</code></span>
 
   <h2 id="keys">Getting in, and getting back out</h2>
 
