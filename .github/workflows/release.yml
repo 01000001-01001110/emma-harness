@@ -49,14 +49,22 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
-      # Once: formatting and lints are a property of the source, not of the
-      # platform reading it.
+      # Formatting is a property of the source and genuinely cannot differ by
+      # platform, so it runs once.
       - name: fmt
         if: matrix.os == 'windows-latest'
         run: cargo fmt --all -- --check
 
+      # **Clippy runs on every platform, and the sentence above used to cover
+      # it.** That was wrong: `dead_code` is evaluated after `cfg`, so a
+      # function whose only caller sits behind `#[cfg(windows)]` is live on one
+      # platform and dead on another, and the lint compiles a different program
+      # on each. Turning it on for macOS in `build.yml` on 2026-09-07 failed
+      # three times in a row, one of them a real hole where unix would have
+      # launched an interactive shell with no terminal and reported success.
+      # This file kept the windows-only spelling for two more days, which is
+      # how a fix fails to reach the gate that matters most.
       - name: clippy
-        if: matrix.os == 'windows-latest'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # --no-fail-fast because cargo stops at the first failing target, and a
@@ -69,16 +77,26 @@ jobs:
     needs: test
     strategy:
       fail-fast: false
+      # **Two targets, and Linux was dropped on 2026-09-09 because nothing had
+      # ever built it.** `build.yml` compiles Windows and macOS on every push,
+      # so both of these are proven continuously and a tag only repeats what
+      # already worked. `x86_64-unknown-linux-gnu` was in this matrix and in no
+      # other workflow -- Linux is deliberately excluded from `build.yml`
+      # ("nobody here runs it, and each platform in the matrix is a paid
+      # minute") -- so the first time it would ever have been compiled was
+      # during a release, where a failure takes the whole job down and publishes
+      # nothing at all. An untested target in a release matrix is not extra
+      # coverage; it is a way for the two targets somebody is waiting for to
+      # fail because of a third nobody asked for.
+      #
+      # Put it back by adding it to `build.yml` first and letting a push prove
+      # it, not by adding it here.
       matrix:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin: emma.exe
             asset: emma-x86_64-windows.exe
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            bin: emma
-            asset: emma-x86_64-linux
           - os: macos-latest
             target: aarch64-apple-darwin
             bin: emma
