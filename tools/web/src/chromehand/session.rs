@@ -337,6 +337,34 @@ fn pick_free_port() -> Result<u16, String> {
 /// can't read its stderr; the CDP endpoint is discovered by polling
 /// `http://127.0.0.1:<port>/json/version` on a port WE chose.)
 /// On Unix, CLOEXEC + null stdio make std::process safe.
+/// Every argument Chrome is started with, in the order it is given them.
+///
+/// A function rather than a block inside `open`, because the one line in it
+/// that has cost this crate a measured failure is a line a test has to be able
+/// to see without starting a browser. `--user-agent` is that line: it is the
+/// same string `WebSearch` sends, for the reason its module records --
+/// `--headless=new` announces itself as `HeadlessChrome/N`, and that alone was
+/// measured turning a search engine's answer from results into silent garbage.
+/// `WebFetch` and every `Browser*` verb launched through here *without* it, so a
+/// page that served WebSearch could refuse the same session a moment later.
+/// One constant, defined in one place, sent by both.
+fn launch_args(port: u16, profile_dir: &Path, headful: bool) -> Vec<String> {
+    let mut args = vec![
+        format!("--remote-debugging-port={}", port),
+        format!("--user-data-dir={}", profile_dir.display()),
+        "--no-first-run".to_string(),
+        "--disable-extensions".to_string(),
+        "--mute-audio".to_string(),
+        "--no-default-browser-check".to_string(),
+        format!("--user-agent={}", crate::search::user_agent()),
+    ];
+    if !headful {
+        args.push("--headless=new".to_string());
+    }
+    args.push("about:blank".to_string());
+    args
+}
+
 fn spawn_chrome_detached(chrome: &Path, args: &[String]) -> Result<u32, String> {
     #[cfg(windows)]
     unsafe {
@@ -471,18 +499,7 @@ pub async fn open(headful: bool) -> Result<serde_json::Value, String> {
     ensure_session_dir("opening a session")?;
 
     let port = pick_free_port()?;
-    let mut args = vec![
-        format!("--remote-debugging-port={}", port),
-        format!("--user-data-dir={}", profile_dir.display()),
-        "--no-first-run".to_string(),
-        "--disable-extensions".to_string(),
-        "--mute-audio".to_string(),
-        "--no-default-browser-check".to_string(),
-    ];
-    if !headful {
-        args.push("--headless=new".to_string());
-    }
-    args.push("about:blank".to_string());
+    let args = launch_args(port, &profile_dir, headful);
 
     let pid = spawn_chrome_detached(&chrome, &args)?;
 
@@ -898,6 +915,36 @@ pub fn list(ttl_secs: u64) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    /// The browser session sends the same User-Agent `WebSearch` does. It did
+    /// not, and the difference was invisible: only the search page had the
+    /// measurement that `HeadlessChrome/N` gets served garbage, so the fix
+    /// landed there and nowhere else while every other verb kept announcing a
+    /// headless browser.
+    #[test]
+    fn the_session_announces_itself_as_a_desktop_chrome_like_websearch_does() {
+        let args = super::launch_args(9222, std::path::Path::new("/tmp/p"), false);
+        let ua = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--user-agent="))
+            .expect("a --user-agent argument is passed to Chrome");
+        assert_eq!(
+            ua,
+            crate::search::user_agent(),
+            "one constant, sent by both"
+        );
+        assert!(
+            !ua.contains("HeadlessChrome"),
+            "the whole point is not to announce headless: {ua}"
+        );
+        // The headless flag itself still goes on, after the UA, so the two are
+        // independent: a headful session keeps the UA and drops only this.
+        assert!(args.contains(&"--headless=new".to_string()));
+        assert!(
+            !super::launch_args(9222, std::path::Path::new("/tmp/p"), true)
+                .contains(&"--headless=new".to_string())
+        );
+    }
+
     use super::*;
 
     /// Windows-only because the wait is: see `wait_for_exit`. The child is not

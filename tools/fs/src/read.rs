@@ -316,9 +316,14 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
     // file will eventually ask for a window that is not there, and the useful
     // answer is the line count, not a refusal.
     if offset > total {
-        return Shown::nothing(ToolOutcome::new(String::new()).with_display(format!(
-            "{shown}: offset {offset} is past the last line ({total})"
-        )));
+        // In the content, not only the display. `display` reaches the terminal
+        // and never the model, so an empty `content` here sent the model an
+        // empty string -- indistinguishable from an empty file, which is the
+        // exact silent wrong answer this module's header argues against. A
+        // model that asked for line 400 of a 300-line file needs to be told
+        // that, or its next move is to conclude the file has nothing in it.
+        let why = format!("{shown}: offset {offset} is past the last line ({total})");
+        return Shown::nothing(ToolOutcome::new(why.clone()).with_display(why));
     }
 
     let mut out = String::new();

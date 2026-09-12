@@ -42,6 +42,11 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # The same ceiling `build.yml` carries, for the same reason: a running job's
+    # log is not served, so a hang inside `cargo test` is hours of nothing to
+    # read, and a timeout turns it into a failure with a log attached. This job
+    # went without one for as long as the workflow existed.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
