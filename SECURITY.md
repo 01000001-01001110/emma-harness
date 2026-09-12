@@ -74,7 +74,13 @@ as intended, report it privately and say you are unsure.
 Emma is maintained by one person and there is no response-time commitment. You
 will get an acknowledgement and a decision on whether it is a defect. A fix
 lands on `main` with a `CHANGELOG.md` entry describing what changed; there is no
-backport branch, because there are no releases to backport to yet.
+backport branch. A fix is released by tagging a new version from `main`, not by
+patching an old one.
 
-Only the current `main` is supported. Emma is `0.x` and has published no
-binaries.
+Only the current `main` and the most recent tagged release are supported. Emma
+is `0.x`; its first binaries, `v0.1.0` for Windows x86_64 and macOS aarch64,
+were published on 2026-09-09. They are unsigned: macOS will refuse to open the
+binary until it is cleared with `xattr -d com.apple.quarantine emma`, and
+Windows SmartScreen will warn. A checksum or provenance attestation is not yet
+published, so a downloaded binary should be treated as trusted only as far as
+the GitHub release page that served it.

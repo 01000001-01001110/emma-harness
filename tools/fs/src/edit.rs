@@ -454,6 +454,26 @@ impl Edit {
         let relabelled_new = strip_read_labels(new);
         let new = relabelled_new.as_deref().unwrap_or(new);
 
+        // **Match the file's line endings, because `Read` stripped them.**
+        // `Read` hands the model lines without their carriage returns, so an
+        // anchor quoted back from a CRLF file arrives as LF and can never match
+        // byte for byte -- and the refusal below could not say why, because from
+        // its side the text simply was not there. This is not a guess about what
+        // the model meant: it is the same rule the `lines` form already follows
+        // by splitting inclusively, which keeps a CRLF file CRLF. The
+        // replacement is converted too, or a one-line edit would seed LF into a
+        // CRLF file -- the whole-file rewrite dressed as a small change that the
+        // `lines` form's comment warns against. A file with no CRLF in it, or an
+        // anchor that already carries one, is left exactly as given.
+        let crlf = before.contains("\r\n");
+        let to_file_eol = |s: &str| -> Option<String> {
+            (crlf && s.contains('\n') && !s.contains('\r')).then(|| s.replace('\n', "\r\n"))
+        };
+        let eol_old = to_file_eol(old);
+        let old = eol_old.as_deref().unwrap_or(old);
+        let eol_new = to_file_eol(new);
+        let new = eol_new.as_deref().unwrap_or(new);
+
         // `str::matches` counts non-overlapping occurrences left to right, which
         // is the same walk `replacen`/`replace` below will make — so the count
         // reported in the error is the count that would have been changed, not

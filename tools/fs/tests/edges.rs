@@ -459,6 +459,84 @@ async fn read_numbers_lines_and_honours_offset_and_limit() {
     );
 }
 
+/// **An anchor quoted back from a CRLF file matches, and the file stays
+/// CRLF.** `Read` strips the carriage returns it shows the model, so the
+/// natural anchor for a CRLF file arrives as LF and, matched byte for byte,
+/// was never found -- and the refusal could not say why. The `lines` form
+/// already preserved CRLF; the `old_string` form now follows the file's own
+/// convention the same way. Three cases because there are three ways to get
+/// this wrong: not matching at all, matching but seeding LF into the file via
+/// the replacement, and double-converting an anchor that already carried CRLF.
+#[tokio::test]
+async fn an_lf_anchor_edits_a_crlf_file_and_leaves_it_crlf() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("dos.txt", "alpha\r\nbeta\r\ngamma\r\n");
+    // `Read` first, because `Edit` refuses an unread file -- and because `Read`
+    // is exactly the step that strips the `\r`: what the model quotes back is
+    // "beta" / "gamma" with no carriage returns, so that is the anchor here.
+    sandbox.ok("Read", json!({ "file_path": "dos.txt" })).await;
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "dos.txt", "old_string": "beta\ngamma", "new_string": "beta\nDELTA" }),
+        )
+        .await;
+    assert_eq!(
+        sandbox.read_file("dos.txt"),
+        "alpha\r\nbeta\r\nDELTA\r\n",
+        "the edit must land, and every line ending must still be CRLF"
+    );
+
+    // An anchor that already carries CRLF is not converted twice. Read again,
+    // because the file changed on disk and a stale read is refused.
+    sandbox.ok("Read", json!({ "file_path": "dos.txt" })).await;
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "dos.txt", "old_string": "alpha\r\nbeta", "new_string": "ALPHA\r\nbeta" }),
+        )
+        .await;
+    assert_eq!(sandbox.read_file("dos.txt"), "ALPHA\r\nbeta\r\nDELTA\r\n");
+
+    // And a plain LF file is left exactly as given: the rule follows the file,
+    // it does not impose anything.
+    sandbox.write_file("unix.txt", "one\ntwo\n");
+    sandbox.ok("Read", json!({ "file_path": "unix.txt" })).await;
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "unix.txt", "old_string": "one\ntwo", "new_string": "one\nTWO" }),
+        )
+        .await;
+    assert_eq!(sandbox.read_file("unix.txt"), "one\nTWO\n");
+}
+
+/// **An offset past the end is a sentence in the content, not only on the
+/// terminal.** `display` never reaches the model, so a `Read` past the last
+/// line used to send it an empty string -- indistinguishable from an empty
+/// file, which is the silent wrong answer `read.rs`'s header argues against. A
+/// model that asked for line 400 of a 300-line file needs the number, or its
+/// next move is to conclude the file is blank.
+#[tokio::test]
+async fn read_past_the_end_tells_the_model_and_not_only_the_terminal() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("short.txt", "one\ntwo\nthree\n");
+    let outcome = sandbox
+        .ok("Read", json!({ "file_path": "short.txt", "offset": 40 }))
+        .await;
+    assert!(
+        !outcome.content.is_empty(),
+        "the model received an empty string, which reads as an empty file"
+    );
+    assert!(
+        outcome.content.contains("offset 40") && outcome.content.contains("past the last line (3)"),
+        "the content must carry the offset and the length: {:?}",
+        outcome.content
+    );
+    // And the terminal still gets the same sentence, not a different one.
+    assert_eq!(outcome.display.as_deref(), Some(outcome.content.as_str()));
+}
+
 /// Both are the model naming the wrong thing, so both must be `bad_arguments`
 /// and not `tool_failed`. Classed as a failure, a single typo would tell the
 /// loop `Read` is broken and cost the model its main tool for the turn. The
